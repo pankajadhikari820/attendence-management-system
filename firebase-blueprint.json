@@ -1,0 +1,284 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Authenticated user account and role mapping (no passwords stored).",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 100 },
+        "email": { "type": "string", "format": "email", "maxLength": 160 },
+        "role": { "type": "string", "enum": ["admin", "teacher", "student"] },
+        "departmentId": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "avatarUrl": { "type": "string", "maxLength": 500 },
+        "emailVerified": { "type": "boolean" },
+        "fcmToken": { "type": "string", "maxLength": 512 }
+      },
+      "required": ["uid", "name", "email", "role", "status"]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "Student academic profile and class enrollment.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "rollNumber": { "type": "string", "maxLength": 40 },
+        "name": { "type": "string", "maxLength": 100 },
+        "email": { "type": "string", "maxLength": 160 },
+        "departmentId": { "type": "string", "maxLength": 128 },
+        "courseId": { "type": "string", "maxLength": 128 },
+        "classId": { "type": "string", "maxLength": 128 },
+        "semester": { "type": "number" },
+        "guardianPhone": { "type": "string", "maxLength": 32 },
+        "status": { "type": "string", "enum": ["active", "inactive"] }
+      },
+      "required": ["uid", "rollNumber", "name", "email", "status"]
+    },
+    "Teacher": {
+      "title": "Teacher",
+      "description": "Faculty member profile.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "employeeId": { "type": "string", "maxLength": 40 },
+        "name": { "type": "string", "maxLength": 100 },
+        "email": { "type": "string", "maxLength": 160 },
+        "departmentId": { "type": "string", "maxLength": 128 },
+        "designation": { "type": "string", "maxLength": 80 },
+        "status": { "type": "string", "enum": ["active", "inactive"] }
+      },
+      "required": ["uid", "employeeId", "name", "email", "status"]
+    },
+    "Department": {
+      "title": "Department",
+      "description": "Academic department.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "maxLength": 20 },
+        "name": { "type": "string", "maxLength": 120 },
+        "headTeacherId": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["code", "name"]
+    },
+    "Course": {
+      "title": "Course",
+      "description": "Academic degree or program.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "maxLength": 24 },
+        "name": { "type": "string", "maxLength": 120 },
+        "departmentId": { "type": "string", "maxLength": 128 },
+        "durationSemesters": { "type": "number" }
+      },
+      "required": ["code", "name", "departmentId"]
+    },
+    "Subject": {
+      "title": "Subject",
+      "description": "Curriculum subject with assigned teacher and threshold.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "maxLength": 24 },
+        "name": { "type": "string", "maxLength": 120 },
+        "departmentId": { "type": "string", "maxLength": 128 },
+        "courseId": { "type": "string", "maxLength": 128 },
+        "teacherId": { "type": "string", "maxLength": 128 },
+        "credits": { "type": "number" },
+        "minAttendancePct": { "type": "number" }
+      },
+      "required": ["code", "name"]
+    },
+    "ClassSection": {
+      "title": "ClassSection",
+      "description": "Class or student cohort.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "maxLength": 24 },
+        "name": { "type": "string", "maxLength": 120 },
+        "section": { "type": "string", "maxLength": 16 },
+        "departmentId": { "type": "string", "maxLength": 128 },
+        "courseId": { "type": "string", "maxLength": 128 },
+        "semester": { "type": "number" },
+        "academicSession": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["code", "name"]
+    },
+    "TimetableSlot": {
+      "title": "TimetableSlot",
+      "description": "Weekly lecture schedule slot.",
+      "type": "object",
+      "properties": {
+        "classId": { "type": "string", "maxLength": 128 },
+        "subjectId": { "type": "string", "maxLength": 128 },
+        "teacherId": { "type": "string", "maxLength": 128 },
+        "dayOfWeek": { "type": "string", "maxLength": 16 },
+        "startTime": { "type": "string", "maxLength": 10 },
+        "endTime": { "type": "string", "maxLength": 10 },
+        "room": { "type": "string", "maxLength": 40 },
+        "academicSession": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["classId", "subjectId", "dayOfWeek", "startTime", "endTime"]
+    },
+    "AttendanceSession": {
+      "title": "AttendanceSession",
+      "description": "Class attendance session with rotating QR token and summary counters.",
+      "type": "object",
+      "properties": {
+        "classId": { "type": "string", "maxLength": 128 },
+        "subjectId": { "type": "string", "maxLength": 128 },
+        "teacherId": { "type": "string", "maxLength": 128 },
+        "academicSession": { "type": "string", "maxLength": 64 },
+        "date": { "type": "string", "maxLength": 20 },
+        "mode": { "type": "string", "enum": ["qr", "manual"] },
+        "status": { "type": "string", "enum": ["active", "closed"] },
+        "qrToken": { "type": "string", "maxLength": 128 },
+        "qrExpiresAtMs": { "type": "number" },
+        "qrRotationSeconds": { "type": "number" },
+        "thresholdPct": { "type": "number" },
+        "presentCount": { "type": "number" },
+        "absentCount": { "type": "number" },
+        "lateCount": { "type": "number" },
+        "totalStudents": { "type": "number" }
+      },
+      "required": ["classId", "subjectId", "teacherId", "date", "mode", "status"]
+    },
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Permanent student attendance record keyed deterministically by {sessionId}_{studentUid}.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 256 },
+        "sessionId": { "type": "string", "maxLength": 128 },
+        "studentId": { "type": "string", "maxLength": 128 },
+        "studentUid": { "type": "string", "maxLength": 128 },
+        "classId": { "type": "string", "maxLength": 128 },
+        "subjectId": { "type": "string", "maxLength": 128 },
+        "teacherId": { "type": "string", "maxLength": 128 },
+        "date": { "type": "string", "maxLength": 20 },
+        "status": { "type": "string", "enum": ["present", "absent", "late", "excused"] },
+        "method": { "type": "string", "enum": ["qr", "manual", "correction", "auto_close"] },
+        "markedBy": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["sessionId", "studentUid", "classId", "subjectId", "date", "status", "method"]
+    },
+    "LeaveRequest": {
+      "title": "LeaveRequest",
+      "description": "Student leave application.",
+      "type": "object",
+      "properties": {
+        "studentUid": { "type": "string", "maxLength": 128 },
+        "fromDate": { "type": "string", "maxLength": 20 },
+        "toDate": { "type": "string", "maxLength": 20 },
+        "reason": { "type": "string", "maxLength": 600 },
+        "attachmentUrl": { "type": "string", "maxLength": 500 },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "reviewedBy": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["studentUid", "fromDate", "toDate", "reason", "status"]
+    },
+    "CorrectionRequest": {
+      "title": "CorrectionRequest",
+      "description": "Student request to correct an attendance record.",
+      "type": "object",
+      "properties": {
+        "recordId": { "type": "string", "maxLength": 256 },
+        "sessionId": { "type": "string", "maxLength": 128 },
+        "studentUid": { "type": "string", "maxLength": 128 },
+        "subjectId": { "type": "string", "maxLength": 128 },
+        "teacherId": { "type": "string", "maxLength": 128 },
+        "currentStatus": { "type": "string", "maxLength": 20 },
+        "requestedStatus": { "type": "string", "enum": ["present", "excused"] },
+        "reason": { "type": "string", "maxLength": 600 },
+        "evidenceUrl": { "type": "string", "maxLength": 500 },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] }
+      },
+      "required": ["recordId", "sessionId", "studentUid", "requestedStatus", "reason", "status"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "User-targeted notification.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 160 },
+        "message": { "type": "string", "maxLength": 600 },
+        "type": { "type": "string", "maxLength": 40 },
+        "read": { "type": "boolean" },
+        "linkView": { "type": "string", "maxLength": 60 }
+      },
+      "required": ["userId", "title", "message", "read"]
+    },
+    "Announcement": {
+      "title": "Announcement",
+      "description": "Institutional announcement.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "maxLength": 160 },
+        "body": { "type": "string", "maxLength": 2500 },
+        "audience": { "type": "string", "enum": ["all", "teachers", "students"] },
+        "authorUid": { "type": "string", "maxLength": 128 },
+        "pinned": { "type": "boolean" }
+      },
+      "required": ["title", "body", "audience", "authorUid"]
+    },
+    "Holiday": {
+      "title": "Holiday",
+      "description": "Academic or public holiday.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "maxLength": 140 },
+        "date": { "type": "string", "maxLength": 20 },
+        "type": { "type": "string", "enum": ["public", "academic", "exam"] },
+        "description": { "type": "string", "maxLength": 500 }
+      },
+      "required": ["title", "date", "type"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable operational audit log.",
+      "type": "object",
+      "properties": {
+        "actorUid": { "type": "string", "maxLength": 128 },
+        "actorEmail": { "type": "string", "maxLength": 160 },
+        "actorRole": { "type": "string", "maxLength": 32 },
+        "action": { "type": "string", "maxLength": 80 },
+        "entityType": { "type": "string", "maxLength": 60 },
+        "entityId": { "type": "string", "maxLength": 160 },
+        "details": { "type": "string", "maxLength": 600 }
+      },
+      "required": ["actorUid", "action", "entityType"]
+    },
+    "AcademicSettings": {
+      "title": "AcademicSettings",
+      "description": "Global academic session and attendance threshold settings.",
+      "type": "object",
+      "properties": {
+        "currentAcademicSession": { "type": "string", "maxLength": 64 },
+        "defaultAttendanceThreshold": { "type": "number" },
+        "qrRotationSeconds": { "type": "number" },
+        "lateGraceMinutes": { "type": "number" },
+        "useCloudFunctions": { "type": "boolean" }
+      },
+      "required": ["currentAcademicSession", "defaultAttendanceThreshold"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": { "schema": { "$ref": "#/entities/User" }, "description": "User profiles and RBAC roles." },
+    "/students/{studentId}": { "schema": { "$ref": "#/entities/Student" }, "description": "Student records." },
+    "/teachers/{teacherId}": { "schema": { "$ref": "#/entities/Teacher" }, "description": "Teacher records." },
+    "/departments/{deptId}": { "schema": { "$ref": "#/entities/Department" }, "description": "Academic departments." },
+    "/courses/{courseId}": { "schema": { "$ref": "#/entities/Course" }, "description": "Degree courses." },
+    "/subjects/{subjectId}": { "schema": { "$ref": "#/entities/Subject" }, "description": "Subjects." },
+    "/classes/{classId}": { "schema": { "$ref": "#/entities/ClassSection" }, "description": "Class sections." },
+    "/timetable/{slotId}": { "schema": { "$ref": "#/entities/TimetableSlot" }, "description": "Weekly timetable." },
+    "/attendanceSessions/{sessionId}": { "schema": { "$ref": "#/entities/AttendanceSession" }, "description": "Attendance sessions." },
+    "/attendanceRecords/{recordId}": { "schema": { "$ref": "#/entities/AttendanceRecord" }, "description": "Deterministic attendance records." },
+    "/leaveRequests/{leaveId}": { "schema": { "$ref": "#/entities/LeaveRequest" }, "description": "Student leave requests." },
+    "/correctionRequests/{correctionId}": { "schema": { "$ref": "#/entities/CorrectionRequest" }, "description": "Attendance correction requests." },
+    "/notifications/{notificationId}": { "schema": { "$ref": "#/entities/Notification" }, "description": "User notifications." },
+    "/announcements/{announcementId}": { "schema": { "$ref": "#/entities/Announcement" }, "description": "Announcements." },
+    "/holidays/{holidayId}": { "schema": { "$ref": "#/entities/Holiday" }, "description": "Academic holidays." },
+    "/auditLogs/{logId}": { "schema": { "$ref": "#/entities/AuditLog" }, "description": "Immutable audit logs." },
+    "/settings/{settingId}": { "schema": { "$ref": "#/entities/AcademicSettings" }, "description": "Global academic policy settings." }
+  }
+}

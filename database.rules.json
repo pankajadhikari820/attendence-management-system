@@ -1,0 +1,21 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "liveSessions": {
+      "$sessionId": {
+        ".read": "auth != null && auth.token.email_verified == true",
+        ".write": "auth != null && auth.token.email_verified == true && (!data.exists() || data.child('teacherUid').val() == auth.uid)"
+      }
+    },
+    "liveCheckins": {
+      "$sessionId": {
+        ".read": "auth != null && auth.token.email_verified == true && root.child('liveSessions').child($sessionId).child('teacherUid').val() == auth.uid",
+        "$studentUid": {
+          ".read": "auth != null && auth.token.email_verified == true && auth.uid == $studentUid",
+          ".write": "auth != null && auth.token.email_verified == true && auth.uid == $studentUid && !data.exists() && root.child('liveSessions').child($sessionId).child('active').val() == true"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SmartAttend — Smart Attendance Management System</title>
+    <meta
+      name="description"
+      content="SmartAttend is a role-based Smart Attendance Management System featuring dynamic expiring QR attendance, shortage analytics, leave & correction workflows, and PDF/Excel reporting."
+    />
+    <meta property="og:title" content="SmartAttend — Smart Attendance Management System" />
+    <meta
+      property="og:description"
+      content="Production-ready academic attendance management with Admin, Teacher, and Student portals powered by Firebase."
+    />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400..700;1,9..40,400..700&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/src/styles/tokens.css" />
+    <link rel="stylesheet" href="/src/styles/base.css" />
+    <link rel="stylesheet" href="/src/styles/layout.css" />
+    <link rel="stylesheet" href="/src/styles/components.css" />
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('smartattend_theme');
+          var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+          if (saved === 'dark' || (!saved && prefersDark)) {
+            document.documentElement.classList.add('dark');
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+    <div id="app" class="app-shell">
+      <div class="boot-screen">
+        <div class="boot-card">
+          <div class="boot-spinner" aria-hidden="true"></div>
+          <p class="boot-title">SmartAttend</p>
+          <p class="boot-subtitle">Initializing workspace...</p>
+        </div>
+      </div>
+    </div>
+    <div id="modal-root" aria-live="polite"></div>
+    <div id="toast-root" class="toast-container" role="status" aria-live="polite"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

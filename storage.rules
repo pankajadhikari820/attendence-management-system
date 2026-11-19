@@ -1,0 +1,34 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    function isVerified() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isAllowedAttachment() {
+      return request.resource.size <= 5 * 1024 * 1024
+        && (request.resource.contentType.matches('image/.*') || request.resource.contentType == 'application/pdf');
+    }
+
+    match /avatars/{uid}/{fileName} {
+      allow read: if isVerified();
+      allow write: if isVerified() && request.auth.uid == uid
+        && request.resource.size <= 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    match /leave-attachments/{uid}/{fileName} {
+      allow read: if isVerified();
+      allow write: if isVerified() && request.auth.uid == uid && isAllowedAttachment();
+    }
+
+    match /correction-evidence/{uid}/{fileName} {
+      allow read: if isVerified();
+      allow write: if isVerified() && request.auth.uid == uid && isAllowedAttachment();
+    }
+  }
+}

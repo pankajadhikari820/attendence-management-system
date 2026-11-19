@@ -1,0 +1,6 @@
+{
+  "name": "SmartAttend",
+  "description": "Smart Attendance Management System with role-based Admin, Teacher, and Student portals, dynamic expiring QR attendance, shortage analytics, and Firebase integration.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
