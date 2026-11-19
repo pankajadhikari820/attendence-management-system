@@ -11,7 +11,6 @@ import {
 import { getDatabase } from 'firebase/database';
 import { getStorage } from 'firebase/storage';
 import { getFunctions } from 'firebase/functions';
-import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check';
 
 // Firebase Configuration supplied by project owner (attendence-system-867c1)
 export const firebaseConfig = {
@@ -26,80 +25,6 @@ export const firebaseConfig = {
 };
 
 export const app = getApps().find((a) => a.name === '[DEFAULT]') || initializeApp(firebaseConfig);
-
-let appCheckInstance = null;
-let secondaryAppCheckInstance = null;
-let appCheckStatus = {
-  enabled: false,
-  reason: 'App Check reCAPTCHA Enterprise site key not configured.',
-};
-
-function resolveRecaptchaEnterpriseSiteKey() {
-  const envSiteKey =
-    import.meta.env?.VITE_RECAPTCHA_ENTERPRISE_SITE_KEY ||
-    import.meta.env?.VITE_FIREBASE_APPCHECK_SITE_KEY ||
-    import.meta.env?.VITE_RECAPTCHA_SITE_KEY ||
-    '';
-
-  if (String(envSiteKey).trim()) {
-    return String(envSiteKey).trim();
-  }
-
-  if (typeof window !== 'undefined') {
-    try {
-      const storedKey = window.localStorage.getItem('smartattend_appcheck_site_key') || '';
-      if (storedKey.trim()) return storedKey.trim();
-    } catch {
-      return '';
-    }
-  }
-
-  return '';
-}
-
-export function initFirebaseAppCheck() {
-  if (appCheckInstance) return appCheckStatus;
-
-  if (typeof window === 'undefined') {
-    return appCheckStatus;
-  }
-
-  const siteKey = resolveRecaptchaEnterpriseSiteKey();
-  if (!siteKey) {
-    appCheckStatus = {
-      enabled: false,
-      reason:
-        'Configure VITE_RECAPTCHA_ENTERPRISE_SITE_KEY in Vercel/Vite environment variables (or save your public Site Key below) after registering reCAPTCHA Enterprise in Firebase App Check.',
-    };
-    return appCheckStatus;
-  }
-
-  try {
-    appCheckInstance = initializeAppCheck(app, {
-      provider: new ReCaptchaEnterpriseProvider(siteKey),
-      isTokenAutoRefreshEnabled: true,
-    });
-    appCheckStatus = {
-      enabled: true,
-      reason: 'Firebase App Check (reCAPTCHA Enterprise) active.',
-    };
-  } catch (err) {
-    appCheckStatus = {
-      enabled: false,
-      reason: err?.message || 'App Check initialization failed.',
-    };
-  }
-  return appCheckStatus;
-}
-
-// Initialize App Check synchronously at module startup BEFORE getAuth/initializeFirestore
-// so every Authentication and Firestore request carries a valid App Check token.
-initFirebaseAppCheck();
-
-export function getAppCheckStatus() {
-  return appCheckStatus;
-}
-
 export const auth = getAuth(app);
 
 let firestoreInstance;
@@ -122,21 +47,6 @@ export const functions = getFunctions(app, 'us-central1');
 export function getSecondaryAuth() {
   const existing = getApps().find((a) => a.name === 'adminProvisioner');
   const secondaryApp = existing || initializeApp(firebaseConfig, 'adminProvisioner');
-
-  if (!secondaryAppCheckInstance && typeof window !== 'undefined') {
-    const siteKey = resolveRecaptchaEnterpriseSiteKey();
-    if (siteKey) {
-      try {
-        secondaryAppCheckInstance = initializeAppCheck(secondaryApp, {
-          provider: new ReCaptchaEnterpriseProvider(siteKey),
-          isTokenAutoRefreshEnabled: true,
-        });
-      } catch {
-        // Already initialized on this secondary app instance
-      }
-    }
-  }
-
   return getAuth(secondaryApp);
 }
 

@@ -291,13 +291,12 @@ function testRoutesRecordsAndSecurityArtifacts() {
   assert.equal(fs.existsSync('public/pwa-512x512.png'), true);
 
   const firebaseCfg = fs.readFileSync('src/firebase/config.js', 'utf8');
-  assert.match(firebaseCfg, /ReCaptchaEnterpriseProvider/);
-  assert.doesNotMatch(firebaseCfg, /ReCaptchaV3Provider/);
-  assert.match(firebaseCfg, /VITE_RECAPTCHA_ENTERPRISE_SITE_KEY/);
-  assert.ok(
-    firebaseCfg.indexOf('initFirebaseAppCheck();') < firebaseCfg.indexOf('getAuth(app)'),
-    'App Check must initialize before getAuth(app)'
-  );
+  assert.doesNotMatch(firebaseCfg, /firebase\/app-check/);
+  assert.doesNotMatch(firebaseCfg, /initializeAppCheck/);
+  assert.doesNotMatch(firebaseCfg, /ReCaptchaEnterpriseProvider|ReCaptchaV3Provider/);
+  assert.doesNotMatch(firebaseCfg, /VITE_FIREBASE_APPCHECK|VITE_RECAPTCHA/);
+  assert.match(firebaseCfg, /getApps\(\)\.find\(\(a\) => a\.name === '\[DEFAULT\]'\)/);
+  assert.match(firebaseCfg, /export const auth = getAuth\(app\);/);
 
   // Verify org creation sequencing & firestore.rules bootstrap permissions
   assert.match(rules, /function isOrgCreator\(orgId\)/);

@@ -38,11 +38,7 @@ Pre-configured in `src/firebase/config.js` and `public/firebase-messaging-sw.js`
    - Create Firestore in **Production mode**, then deploy `firestore.rules` and `firestore.indexes.json`.
 3. **Realtime Database & Storage**:
    - Ensure Realtime Database (`attendence-system-867c1-default-rtdb.firebaseio.com`) and Storage (`attendence-system-867c1.firebasestorage.app`) are initialized, then deploy `database.rules.json` and `storage.rules`.
-4. **Firebase App Check (reCAPTCHA Enterprise)**:
-   - Register your web app under **Firebase Console > App Check** with your Google Cloud **reCAPTCHA Enterprise** website key.
-   - Ensure your deployed domain (e.g., `attendence-management-system-rouge.vercel.app`) is allowlisted in both Google Cloud **reCAPTCHA Enterprise Key > Domains** and **Firebase Console > Authentication > Settings > Authorized domains**.
-   - Set `VITE_RECAPTCHA_ENTERPRISE_SITE_KEY` in Vercel Project Settings > Environment Variables (and redeploy), or save the public site key in **Owner > Organization Settings > App Check**. Never expose secret keys in frontend code.
-5. **Firebase Cloud Messaging (Optional Web Push)**:
+4. **Firebase Cloud Messaging (Optional Web Push)**:
    - Generate a Web Push VAPID key pair under **Project Settings > Cloud Messaging** and enter it under **Profile & Preferences**.
 
 ---

@@ -1,6 +1,6 @@
 import { onAuthStateChanged } from 'firebase/auth';
 import { query, where, onSnapshot } from 'firebase/firestore';
-import { auth, initFirebaseAppCheck, testFirestoreConnection } from './firebase/config.js';
+import { auth, testFirestoreConnection } from './firebase/config.js';
 import {
   isAuthFlowInProgress,
   resolvePostLoginSession,
@@ -533,7 +533,6 @@ window.addEventListener('smartattend:switch-org', async (e) => {
 });
 
 async function boot() {
-  initFirebaseAppCheck();
   initPwaAndNetwork((online) => setState({ isOnline: online }));
   testFirestoreConnection();
   onAuthStateChanged(auth, (user) => {

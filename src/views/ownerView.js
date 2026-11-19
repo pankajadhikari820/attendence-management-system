@@ -35,7 +35,6 @@ import {
   exportAttendanceCsv,
   downloadJsonBackup,
 } from '../services/reportService.js';
-import { getAppCheckStatus } from '../firebase/config.js';
 import {
   calculateAttendanceSummary,
   escapeHtml,
@@ -349,11 +348,6 @@ async function renderOwnerOrgSettings(container) {
   const pol = activeOrg?.policies || settings || {};
   const geo = pol.geofence || { enabled: false, lat: 0, lng: 0, radiusMeters: 150 };
   const weeklyOffDays = Array.isArray(pol.weeklyOffDays) ? pol.weeklyOffDays : [0];
-  const appCheck = getAppCheckStatus();
-  let savedSiteKey = '';
-  try {
-    savedSiteKey = localStorage.getItem('smartattend_appcheck_site_key') || '';
-  } catch {}
 
   const dayOptions = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -526,18 +520,6 @@ async function renderOwnerOrgSettings(container) {
               .join('')}
           </div>
         </section>
-
-        <section class="panel stack-md">
-          <h2 class="panel-title">Firebase App Check (reCAPTCHA Enterprise)</h2>
-          <p class="panel-meta">${escapeHtml(appCheck.reason)}</p>
-          <form id="appcheck-form" class="stack-sm">
-            <label class="field-label" for="ac-key">reCAPTCHA Enterprise Site Key (Google Cloud / Firebase App Check)</label>
-            <div style="display:flex;gap:0.5rem;">
-              <input class="input mono" id="ac-key" value="${escapeHtml(savedSiteKey)}" placeholder="6Lc..." />
-              <button type="submit" class="btn btn-secondary">Save Key</button>
-            </div>
-          </form>
-        </section>
       </div>
     </div>
   `;
@@ -644,17 +626,6 @@ async function renderOwnerOrgSettings(container) {
       showToast(`Subscription tier set to ${plan.name}.`, 'success');
       renderOwnerOrgSettings(container);
     });
-  });
-
-  container.querySelector('#appcheck-form').addEventListener('submit', (e) => {
-    e.preventDefault();
-    const key = container.querySelector('#ac-key').value.trim();
-    try {
-      localStorage.setItem('smartattend_appcheck_site_key', key);
-      showToast('App Check site key saved locally. Reload app to initialize reCAPTCHA Enterprise.', 'success');
-    } catch {
-      showToast('Unable to access browser localStorage.', 'warning');
-    }
   });
 }
 
