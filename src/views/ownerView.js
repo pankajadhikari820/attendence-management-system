@@ -528,10 +528,10 @@ async function renderOwnerOrgSettings(container) {
         </section>
 
         <section class="panel stack-md">
-          <h2 class="panel-title">Firebase App Check (ReCaptcha v3)</h2>
+          <h2 class="panel-title">Firebase App Check (reCAPTCHA Enterprise)</h2>
           <p class="panel-meta">${escapeHtml(appCheck.reason)}</p>
           <form id="appcheck-form" class="stack-sm">
-            <label class="field-label" for="ac-key">ReCaptcha v3 Site Key (from Firebase Console &gt; App Check)</label>
+            <label class="field-label" for="ac-key">reCAPTCHA Enterprise Site Key (Google Cloud / Firebase App Check)</label>
             <div style="display:flex;gap:0.5rem;">
               <input class="input mono" id="ac-key" value="${escapeHtml(savedSiteKey)}" placeholder="6Lc..." />
               <button type="submit" class="btn btn-secondary">Save Key</button>
@@ -651,7 +651,7 @@ async function renderOwnerOrgSettings(container) {
     const key = container.querySelector('#ac-key').value.trim();
     try {
       localStorage.setItem('smartattend_appcheck_site_key', key);
-      showToast('App Check key saved locally. Reload app to initialize ReCaptcha v3.', 'success');
+      showToast('App Check site key saved locally. Reload app to initialize reCAPTCHA Enterprise.', 'success');
     } catch {
       showToast('Unable to access browser localStorage.', 'warning');
     }

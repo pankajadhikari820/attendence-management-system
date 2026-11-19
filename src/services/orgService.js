@@ -71,6 +71,31 @@ export function getOrgTypeMeta(typeId) {
   return ORG_TYPES.find((t) => t.id === typeId) || ORG_TYPES[ORG_TYPES.length - 1];
 }
 
+async function ensureGlobalUserProfile({ uid, name, email, emailVerified, activeOrgId }) {
+  const userRef = doc(db, 'users', uid);
+  const existingSnap = await getDoc(userRef);
+  if (!existingSnap.exists()) {
+    await setDoc(userRef, {
+      uid,
+      name: name.trim(),
+      email: email.trim().toLowerCase(),
+      avatarUrl: '',
+      emailVerified: Boolean(emailVerified),
+      lastActiveOrgId: activeOrgId,
+      status: 'active',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } else {
+    await updateDoc(userRef, {
+      name: name.trim(),
+      emailVerified: Boolean(emailVerified),
+      lastActiveOrgId: activeOrgId,
+      updatedAt: serverTimestamp(),
+    });
+  }
+}
+
 export async function provisionOrganizationDocuments({
   ownerUid,
   ownerName,
@@ -101,10 +126,18 @@ export async function provisionOrganizationDocuments({
     : 'Department Manager';
   const memberLabel = typeMeta.memberLabel;
 
-  const batch = writeBatch(db);
+  // Step 1: Ensure global users/{ownerUid} profile exists (creates or updates allowed fields only)
+  await ensureGlobalUserProfile({
+    uid: ownerUid,
+    name: ownerName,
+    email: ownerEmail,
+    emailVerified,
+    activeOrgId: orgId,
+  });
 
-  // 1. Organization Root Document
-  batch.set(doc(db, 'organizations', orgId), {
+  // Step 2: Commit organizations/{orgId} root document FIRST so exists(/organizations/{orgId})
+  // resolves to true for all dependent subcollection and membership security rules.
+  await setDoc(doc(db, 'organizations', orgId), {
     orgId,
     name: orgName.trim(),
     type: orgType,
@@ -137,6 +170,9 @@ export async function provisionOrganizationDocuments({
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
+
+  // Step 3: Batch-create membership, branches, departments, shifts, designations, member, QR token, and audit log
+  const batch = writeBatch(db);
 
   // 2. Default Branch
   batch.set(doc(db, 'organizations', orgId, 'branches', defaultBranchId), {
@@ -263,22 +299,7 @@ export async function provisionOrganizationDocuments({
     updatedAt: serverTimestamp(),
   });
 
-  // 8. Global User Profile & Trusted Membership Lookup (users/{uid}/memberships/{orgId})
-  batch.set(
-    doc(db, 'users', ownerUid),
-    {
-      uid: ownerUid,
-      name: ownerName.trim(),
-      email: ownerEmail.trim().toLowerCase(),
-      avatarUrl: '',
-      emailVerified,
-      lastActiveOrgId: orgId,
-      status: 'active',
-      updatedAt: serverTimestamp(),
-    },
-    { merge: true }
-  );
-
+  // 8. Trusted Membership Lookup (users/{uid}/memberships/{orgId})
   batch.set(doc(db, 'users', ownerUid, 'memberships', orgId), {
     orgId,
     orgName: orgName.trim(),
@@ -505,20 +526,15 @@ export async function joinOrganizationWithCodeOrId({
   const memberPublicId = generateMemberPublicId(targetOrgId);
   const qrTokenId = generateOpaqueQrToken();
 
+  await ensureGlobalUserProfile({
+    uid,
+    name,
+    email,
+    emailVerified,
+    activeOrgId: targetOrgId,
+  });
+
   const batch = writeBatch(db);
-  batch.set(
-    doc(db, 'users', uid),
-    {
-      uid,
-      name: name.trim(),
-      email: email.trim().toLowerCase(),
-      emailVerified,
-      lastActiveOrgId: targetOrgId,
-      status: 'active',
-      updatedAt: serverTimestamp(),
-    },
-    { merge: true }
-  );
 
   batch.set(doc(db, 'users', uid, 'memberships', targetOrgId), {
     orgId: targetOrgId,

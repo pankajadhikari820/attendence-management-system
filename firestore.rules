@@ -41,6 +41,12 @@ service cloud.firestore {
         && membershipData(orgId, request.auth.uid).status == 'active';
     }
 
+    function isOrgCreator(orgId) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/organizations/$(orgId))
+        && get(/databases/$(database)/documents/organizations/$(orgId)).data.ownerUid == request.auth.uid;
+    }
+
     function isOrgOwner(orgId) {
       return isVerifiedMemberOfOrg(orgId) && (
         membershipData(orgId, request.auth.uid).isOwner == true ||
@@ -103,9 +109,8 @@ service cloud.firestore {
         );
 
         allow create: if isSignedIn() && isValidId(orgId) && incoming().orgId == orgId && incoming().uid == userId && (
-          // Org Owner creating initial org or elevated admin provisioning member
-          (exists(/databases/$(database)/documents/organizations/$(orgId)) &&
-           get(/databases/$(database)/documents/organizations/$(orgId)).data.ownerUid == request.auth.uid) ||
+          // Org Creator creating their initial owner membership
+          (isOrgCreator(orgId) && userId == request.auth.uid && incoming().isOwner == true && incoming().portalTier == 'owner') ||
           isOrgOwner(orgId) ||
           hasOrgPerm(orgId, 'canManageMembers') ||
           // Member self-onboarding strictly locked to base 'member' tier with zero elevated permissions
@@ -147,7 +152,12 @@ service cloud.firestore {
       // Branches
       match /branches/{branchId} {
         allow read: if isVerifiedMemberOfOrg(orgId);
-        allow create, update: if isVerifiedMemberOfOrg(orgId) && (
+        allow create: if (isOrgCreator(orgId) && incoming().orgId == orgId) || (
+          isVerifiedMemberOfOrg(orgId) && (
+            isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageBranches')
+          )
+        );
+        allow update: if isVerifiedMemberOfOrg(orgId) && (
           isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageBranches')
         );
         allow delete: if isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageBranches');
@@ -156,7 +166,12 @@ service cloud.firestore {
       // Departments
       match /departments/{deptId} {
         allow read: if isVerifiedMemberOfOrg(orgId);
-        allow create, update: if isVerifiedMemberOfOrg(orgId) && (
+        allow create: if (isOrgCreator(orgId) && incoming().orgId == orgId) || (
+          isVerifiedMemberOfOrg(orgId) && (
+            isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageDepartments')
+          )
+        );
+        allow update: if isVerifiedMemberOfOrg(orgId) && (
           isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageDepartments')
         );
         allow delete: if isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageDepartments');
@@ -165,7 +180,12 @@ service cloud.firestore {
       // Designations & Permissions
       match /designations/{desId} {
         allow read: if isVerifiedMemberOfOrg(orgId);
-        allow create, update: if isVerifiedMemberOfOrg(orgId) && (
+        allow create: if (isOrgCreator(orgId) && incoming().orgId == orgId) || (
+          isVerifiedMemberOfOrg(orgId) && (
+            isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageHierarchy')
+          )
+        );
+        allow update: if isVerifiedMemberOfOrg(orgId) && (
           isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageHierarchy')
         );
         allow delete: if isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageHierarchy');
@@ -174,7 +194,12 @@ service cloud.firestore {
       // Shifts
       match /shifts/{shiftId} {
         allow read: if isVerifiedMemberOfOrg(orgId);
-        allow create, update: if isVerifiedMemberOfOrg(orgId) && (
+        allow create: if (isOrgCreator(orgId) && incoming().orgId == orgId) || (
+          isVerifiedMemberOfOrg(orgId) && (
+            isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageShifts')
+          )
+        );
+        allow update: if isVerifiedMemberOfOrg(orgId) && (
           isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageShifts')
         );
         allow delete: if isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageShifts');
@@ -210,8 +235,7 @@ service cloud.firestore {
         );
 
         allow create: if isSignedIn() && incoming().orgId == orgId && incoming().uid == memberUid && (
-          (exists(/databases/$(database)/documents/organizations/$(orgId)) &&
-           get(/databases/$(database)/documents/organizations/$(orgId)).data.ownerUid == request.auth.uid) ||
+          (isOrgCreator(orgId) && memberUid == request.auth.uid && incoming().isOwner == true) ||
           isOrgOwner(orgId) ||
           hasOrgPerm(orgId, 'canManageMembers') ||
           (request.auth.uid == memberUid
@@ -238,8 +262,7 @@ service cloud.firestore {
         allow get: if isVerifiedMemberOfOrg(orgId);
         allow list: if isOrgOwner(orgId) || hasOrgPerm(orgId, 'canTakeAttendance') || hasOrgPerm(orgId, 'canManageMembers');
         allow create: if isSignedIn() && incoming().orgId == orgId && (
-          (exists(/databases/$(database)/documents/organizations/$(orgId)) &&
-           get(/databases/$(database)/documents/organizations/$(orgId)).data.ownerUid == request.auth.uid) ||
+          isOrgCreator(orgId) ||
           isOrgOwner(orgId) ||
           hasOrgPerm(orgId, 'canManageMembers') ||
           incoming().memberUid == request.auth.uid
@@ -374,7 +397,7 @@ service cloud.firestore {
       // Immutable Audit Logs
       match /auditLogs/{logId} {
         allow read: if isOrgOwner(orgId) || hasOrgPerm(orgId, 'canViewAuditLogs');
-        allow create: if isVerifiedMemberOfOrg(orgId)
+        allow create: if (isOrgCreator(orgId) || isVerifiedMemberOfOrg(orgId))
           && incoming().orgId == orgId
           && incoming().actorUid == request.auth.uid;
         allow update, delete: if false;

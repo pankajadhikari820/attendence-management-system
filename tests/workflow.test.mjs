@@ -289,6 +289,26 @@ function testRoutesRecordsAndSecurityArtifacts() {
   assert.equal(fs.existsSync('public/sw.js'), true);
   assert.equal(fs.existsSync('public/pwa-192x192.png'), true);
   assert.equal(fs.existsSync('public/pwa-512x512.png'), true);
+
+  const firebaseCfg = fs.readFileSync('src/firebase/config.js', 'utf8');
+  assert.match(firebaseCfg, /ReCaptchaEnterpriseProvider/);
+  assert.doesNotMatch(firebaseCfg, /ReCaptchaV3Provider/);
+  assert.match(firebaseCfg, /VITE_RECAPTCHA_ENTERPRISE_SITE_KEY/);
+  assert.ok(
+    firebaseCfg.indexOf('initFirebaseAppCheck();') < firebaseCfg.indexOf('getAuth(app)'),
+    'App Check must initialize before getAuth(app)'
+  );
+
+  // Verify org creation sequencing & firestore.rules bootstrap permissions
+  assert.match(rules, /function isOrgCreator\(orgId\)/);
+  assert.match(rules, /\(isOrgCreator\(orgId\) && incoming\(\)\.orgId == orgId\)/);
+  assert.match(rules, /isOrgCreator\(orgId\) \|\| isVerifiedMemberOfOrg\(orgId\)/);
+
+  const orgServiceSrc = fs.readFileSync('src/services/orgService.js', 'utf8');
+  const step1Idx = orgServiceSrc.indexOf('await ensureGlobalUserProfile(');
+  const step2Idx = orgServiceSrc.indexOf("await setDoc(doc(db, 'organizations', orgId)");
+  const step3Idx = orgServiceSrc.indexOf('const batch = writeBatch(db);', step2Idx);
+  assert.ok(step1Idx > 0 && step2Idx > step1Idx && step3Idx > step2Idx, 'Org creation must order user profile -> org root -> subcollections batch');
 }
 
 testOrgIdsAndZeroPiiQr();
