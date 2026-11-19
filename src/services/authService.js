@@ -15,93 +15,158 @@ import { auth, db, functions, getSecondaryAuth } from '../firebase/config.js';
 import { OperationType, handleFirestoreError } from '../firebase/errors.js';
 import { logAudit, setDocById, updateDocById } from './firestoreService.js';
 import { getState } from '../state/store.js';
+import { validateUserProfile } from '../utils/authRouting.js';
 
 export const BOOTSTRAPPED_ADMIN_EMAIL = 'pankajadhikari820@gmail.com';
 
+let authFlowInProgress = false;
+export function isAuthFlowInProgress() {
+  return authFlowInProgress;
+}
+
+function isBootstrappedAdminEmail(email) {
+  return String(email || '').trim().toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
+}
+
 export async function loginWithEmail(email, password) {
-  const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
-  return cred.user;
+  authFlowInProgress = true;
+  try {
+    const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
+    await reload(cred.user).catch(() => {});
+    try {
+      const profile = await fetchVerifiedUserProfile(cred.user, {
+        allowBootstrapCreate: isBootstrappedAdminEmail(cred.user.email),
+      });
+      const roleData = await loadRoleDocument(profile);
+      return { user: cred.user, profile, roleData };
+    } catch (profileErr) {
+      await signOut(auth).catch(() => {});
+      throw profileErr;
+    }
+  } finally {
+    authFlowInProgress = false;
+  }
 }
 
 export async function loginWithGoogle() {
-  const provider = new GoogleAuthProvider();
-  provider.setCustomParameters({ prompt: 'select_account' });
-  const cred = await signInWithPopup(auth, provider);
-  await ensureUserProfileExists(cred.user);
-  return cred.user;
+  authFlowInProgress = true;
+  try {
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+    const cred = await signInWithPopup(auth, provider);
+    try {
+      const profile = await fetchVerifiedUserProfile(cred.user, { allowBootstrapCreate: true });
+      const roleData = await loadRoleDocument(profile);
+      return { user: cred.user, profile, roleData };
+    } catch (profileErr) {
+      await signOut(auth).catch(() => {});
+      throw profileErr;
+    }
+  } finally {
+    authFlowInProgress = false;
+  }
 }
 
 export async function registerStudentAccount({ name, email, password, rollNumber, departmentId = '', classId = '' }) {
-  const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
-  await updateProfile(cred.user, { displayName: name.trim() });
-  await sendEmailVerification(cred.user);
+  authFlowInProgress = true;
+  try {
+    const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+    await updateProfile(cred.user, { displayName: name.trim() });
+    await sendEmailVerification(cred.user).catch(() => {});
 
-  const isBootstrapAdmin = email.trim().toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
-  const role = isBootstrapAdmin ? 'admin' : 'student';
+    const role = isBootstrappedAdminEmail(email) && cred.user.emailVerified ? 'admin' : 'student';
+    const cleanRoll = (rollNumber || `STU-${cred.user.uid.slice(0, 6).toUpperCase()}`).trim();
 
-  await setDoc(doc(db, 'users', cred.user.uid), {
-    uid: cred.user.uid,
-    name: name.trim(),
-    email: email.trim().toLowerCase(),
-    role,
-    departmentId,
-    status: 'active',
-    avatarUrl: '',
-    emailVerified: cred.user.emailVerified,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-
-  if (role === 'student') {
-    await setDoc(doc(db, 'students', cred.user.uid), {
+    const userProfile = {
       uid: cred.user.uid,
-      rollNumber: (rollNumber || `STU-${cred.user.uid.slice(0, 6).toUpperCase()}`).trim(),
       name: name.trim(),
       email: email.trim().toLowerCase(),
-      departmentId,
-      courseId: '',
-      classId,
-      semester: 1,
-      guardianPhone: '',
-      status: 'active',
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-  }
-
-  return cred.user;
-}
-
-export async function ensureUserProfileExists(firebaseUser) {
-  if (!firebaseUser) return null;
-  const userRef = doc(db, 'users', firebaseUser.uid);
-  try {
-    const snap = await getDoc(userRef);
-    if (snap.exists()) {
-      const data = snap.data();
-      if (data.emailVerified !== firebaseUser.emailVerified) {
-        await updateDocById('users', firebaseUser.uid, { emailVerified: firebaseUser.emailVerified }).catch(() => {});
-      }
-      return { id: snap.id, ...data, emailVerified: firebaseUser.emailVerified };
-    }
-
-    const isBootstrapAdmin =
-      (firebaseUser.email || '').toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
-    const role = isBootstrapAdmin ? 'admin' : 'student';
-    const profile = {
-      uid: firebaseUser.uid,
-      name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
-      email: (firebaseUser.email || '').toLowerCase(),
       role,
-      departmentId: '',
+      departmentId,
       status: 'active',
-      avatarUrl: firebaseUser.photoURL || '',
-      emailVerified: firebaseUser.emailVerified,
+      avatarUrl: '',
+      emailVerified: cred.user.emailVerified,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
-    await setDoc(userRef, profile);
+    await setDoc(doc(db, 'users', cred.user.uid), userProfile);
 
+    let roleData = null;
+    if (role === 'student') {
+      roleData = {
+        uid: cred.user.uid,
+        rollNumber: cleanRoll,
+        name: name.trim(),
+        email: email.trim().toLowerCase(),
+        departmentId,
+        courseId: '',
+        classId,
+        semester: 1,
+        guardianPhone: '',
+        status: 'active',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+      await setDoc(doc(db, 'students', cred.user.uid), roleData);
+    }
+
+    return { user: cred.user, profile: { id: cred.user.uid, ...userProfile }, roleData };
+  } finally {
+    authFlowInProgress = false;
+  }
+}
+
+export async function fetchVerifiedUserProfile(firebaseUser, { allowBootstrapCreate = false } = {}) {
+  if (!firebaseUser) return null;
+  const userRef = doc(db, 'users', firebaseUser.uid);
+  let snap;
+  try {
+    snap = await getDoc(userRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, `users/${firebaseUser.uid}`);
+  }
+
+  if (snap.exists()) {
+    const data = snap.data();
+    const shouldPromoteBootstrap =
+      isBootstrappedAdminEmail(firebaseUser.email) &&
+      firebaseUser.emailVerified &&
+      data.role !== 'admin';
+    if (shouldPromoteBootstrap) {
+      await updateDocById('users', firebaseUser.uid, {
+        role: 'admin',
+        emailVerified: true,
+      }).catch(() => {});
+      data.role = 'admin';
+    }
+    const validated = validateUserProfile({ id: snap.id, ...data }, firebaseUser.uid);
+    if (data.emailVerified !== firebaseUser.emailVerified) {
+      await updateDocById('users', firebaseUser.uid, { emailVerified: firebaseUser.emailVerified }).catch(() => {});
+    }
+    return { ...validated, emailVerified: firebaseUser.emailVerified };
+  }
+
+  if (!allowBootstrapCreate) {
+    // Throws descriptive error: "User profile not found in Firestore (users/<uid>)..."
+    validateUserProfile(null, firebaseUser.uid);
+  }
+
+  const role = isBootstrappedAdminEmail(firebaseUser.email) ? 'admin' : 'student';
+  const profile = {
+    uid: firebaseUser.uid,
+    name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
+    email: (firebaseUser.email || '').toLowerCase(),
+    role,
+    departmentId: '',
+    status: 'active',
+    avatarUrl: firebaseUser.photoURL || '',
+    emailVerified: firebaseUser.emailVerified,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  try {
+    await setDoc(userRef, profile);
     if (role === 'student') {
       await setDoc(doc(db, 'students', firebaseUser.uid), {
         uid: firebaseUser.uid,
@@ -118,21 +183,32 @@ export async function ensureUserProfileExists(firebaseUser) {
         updatedAt: serverTimestamp(),
       });
     }
-    return { id: firebaseUser.uid, ...profile };
   } catch (error) {
-    handleFirestoreError(error, OperationType.GET, `users/${firebaseUser.uid}`);
+    handleFirestoreError(error, OperationType.CREATE, `users/${firebaseUser.uid}`);
   }
+
+  return { id: firebaseUser.uid, ...profile };
+}
+
+export async function ensureUserProfileExists(firebaseUser) {
+  return fetchVerifiedUserProfile(firebaseUser, {
+    allowBootstrapCreate: isBootstrappedAdminEmail(firebaseUser?.email),
+  });
 }
 
 export async function loadRoleDocument(profile) {
   if (!profile) return null;
-  if (profile.role === 'student') {
-    const snap = await getDoc(doc(db, 'students', profile.uid));
-    return snap.exists() ? { id: snap.id, ...snap.data() } : null;
-  }
-  if (profile.role === 'teacher') {
-    const snap = await getDoc(doc(db, 'teachers', profile.uid));
-    return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+  try {
+    if (profile.role === 'student') {
+      const snap = await getDoc(doc(db, 'students', profile.uid));
+      return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+    }
+    if (profile.role === 'teacher') {
+      const snap = await getDoc(doc(db, 'teachers', profile.uid));
+      return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+    }
+  } catch (err) {
+    console.warn('Role detail document fetch warning:', err.message);
   }
   return null;
 }

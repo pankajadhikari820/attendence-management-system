@@ -8,17 +8,98 @@ import {
   validateQrTokenTiming,
   paginateItems,
 } from '../src/utils/attendanceMath.js';
+import {
+  validateUserProfile,
+  resolveDashboardRoute,
+  parseHashRoute,
+} from '../src/utils/authRouting.js';
 
 // Simulated in-memory Firestore-compatible workflow harness validating all core workflows:
-// 1. Admin creates teacher and student
-// 2. Teacher starts a session
-// 3. Student marks attendance via QR
-// 4. Duplicate scan is rejected
-// 5. Attendance percentage updates
-// 6. Warning appears below threshold (75%)
-// 7. Teacher exports report data
+// 1. Register -> Login -> Role Check -> Correct Dashboard -> Logout (Admin, Teacher, Student + missing profile/role error)
+// 2. Admin creates teacher and student
+// 3. Teacher starts a session
+// 4. Student marks attendance via QR
+// 5. Duplicate scan is rejected
+// 6. Attendance percentage updates
+// 7. Warning appears below threshold (75%)
+
+function runAuthNavigationTests() {
+  const usersCollection = new Map();
+  let currentSession = null;
+
+  // Step 1: Register student
+  const studentUid = 'uid_student_1';
+  usersCollection.set(studentUid, {
+    uid: studentUid,
+    name: 'Aarav Patel',
+    email: 'aarav@inst.edu',
+    role: 'student',
+    status: 'active',
+  });
+
+  // Register teacher & admin profiles (provisioned in Firestore users collection)
+  usersCollection.set('uid_teacher_1', {
+    uid: 'uid_teacher_1',
+    name: 'Dr. Meera Nair',
+    email: 'meera@inst.edu',
+    role: 'teacher',
+    status: 'active',
+  });
+  usersCollection.set('uid_admin_1', {
+    uid: 'uid_admin_1',
+    name: 'Principal Admin',
+    email: 'admin@inst.edu',
+    role: 'admin',
+    status: 'active',
+  });
+
+  function simulateLogin(uid) {
+    const profile = usersCollection.get(uid) || null;
+    const validated = validateUserProfile(profile, uid);
+    const route = resolveDashboardRoute(validated, uid);
+    currentSession = { uid, profile: validated, hash: route.hash };
+    return currentSession;
+  }
+
+  function simulateLogout() {
+    currentSession = null;
+    return '#/login';
+  }
+
+  // Step 2 & 3: Login -> Role Check -> Correct Dashboard
+  const studentSess = simulateLogin('uid_student_1');
+  assert.equal(studentSess.profile.role, 'student');
+  assert.equal(studentSess.hash, '#/student/overview');
+  assert.deepEqual(parseHashRoute(studentSess.hash), { type: 'dashboard', role: 'student', view: 'overview' });
+
+  const teacherSess = simulateLogin('uid_teacher_1');
+  assert.equal(teacherSess.profile.role, 'teacher');
+  assert.equal(teacherSess.hash, '#/teacher/overview');
+
+  const adminSess = simulateLogin('uid_admin_1');
+  assert.equal(adminSess.profile.role, 'admin');
+  assert.equal(adminSess.hash, '#/admin/overview');
+
+  // Missing profile error (does not hang or fabricate role)
+  assert.throws(() => simulateLogin('uid_missing'), /User profile not found in Firestore/);
+
+  // Missing/invalid role error
+  usersCollection.set('uid_norole', { uid: 'uid_norole', name: 'No Role', status: 'active' });
+  assert.throws(() => simulateLogin('uid_norole'), /missing a valid role/);
+
+  // Inactive account error
+  usersCollection.set('uid_inactive', { uid: 'uid_inactive', name: 'Disabled', role: 'student', status: 'inactive' });
+  assert.throws(() => simulateLogin('uid_inactive'), /inactive/i);
+
+  // Step 4: Logout clears session and returns to login hash
+  const postLogoutHash = simulateLogout();
+  assert.equal(currentSession, null);
+  assert.equal(postLogoutHash, '#/login');
+}
 
 function runWorkflowTests() {
+  runAuthNavigationTests();
+
   const db = {
     teachers: new Map(),
     students: new Map(),
@@ -126,7 +207,7 @@ function runWorkflowTests() {
   assert.equal(paged.items.length, 10);
   assert.equal(paged.items[0], 11);
 
-  console.log('All SmartAttend workflow tests passed (7/7 assertions verified).');
+  console.log('All SmartAttend auth, role routing, and attendance workflow tests passed.');
 }
 
 runWorkflowTests();

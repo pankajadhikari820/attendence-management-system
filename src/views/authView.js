@@ -13,7 +13,7 @@ import { showToast, toggleTheme, getCurrentTheme } from '../utils/ui.js';
 
 let currentTab = 'signin';
 
-export function renderAuthView(container, firebaseUser) {
+export function renderAuthView(container, firebaseUser, authError = '') {
   if (firebaseUser && !firebaseUser.emailVerified) {
     renderVerificationGate(container, firebaseUser);
     return;
@@ -73,6 +73,15 @@ export function renderAuthView(container, firebaseUser) {
             </button>
           </div>
 
+          ${
+            authError
+              ? `<div class="notice notice-danger" role="alert">
+                  <strong style="color:var(--danger);font-size:0.875rem;">Access Verification Error</strong>
+                  <span style="font-size:0.8125rem;color:var(--text-secondary);">${escapeHtml(authError)}</span>
+                </div>`
+              : ''
+          }
+
           <div class="segmented-bar" role="tablist" aria-label="Authentication mode">
             <button type="button" class="segmented-btn ${currentTab === 'signin' ? 'active' : ''}" data-auth-tab="signin">Sign In</button>
             <button type="button" class="segmented-btn ${currentTab === 'signup' ? 'active' : ''}" data-auth-tab="signup">Register</button>
@@ -87,7 +96,7 @@ export function renderAuthView(container, firebaseUser) {
 
   const onThemeToggle = () => {
     toggleTheme();
-    renderAuthView(container, firebaseUser);
+    renderAuthView(container, firebaseUser, authError);
   };
   container.querySelector('#auth-theme-btn')?.addEventListener('click', onThemeToggle);
   container.querySelector('#auth-theme-mobile-btn')?.addEventListener('click', onThemeToggle);
@@ -95,7 +104,7 @@ export function renderAuthView(container, firebaseUser) {
   container.querySelectorAll('[data-auth-tab]').forEach((btn) => {
     btn.addEventListener('click', () => {
       currentTab = btn.getAttribute('data-auth-tab');
-      renderAuthView(container, firebaseUser);
+      renderAuthView(container, firebaseUser, '');
     });
   });
 
@@ -134,33 +143,43 @@ function renderSignInForm(slot) {
   const form = slot.querySelector('#signin-form');
   const errEl = slot.querySelector('#signin-error');
   const submitBtn = slot.querySelector('#signin-submit-btn');
+  const googleBtn = slot.querySelector('#google-signin-btn');
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     errEl.style.display = 'none';
     submitBtn.disabled = true;
-    submitBtn.textContent = 'Signing in...';
+    googleBtn.disabled = true;
+    submitBtn.textContent = 'Verifying account & role...';
     try {
       const fd = new FormData(form);
-      await loginWithEmail(fd.get('email'), fd.get('password'));
-      showToast('Signed in successfully.', 'success');
+      const sessionResult = await loginWithEmail(fd.get('email'), fd.get('password'));
+      window.dispatchEvent(new CustomEvent('smartattend:session-ready', { detail: sessionResult }));
     } catch (err) {
-      errEl.textContent = err.message || 'Invalid credentials.';
+      errEl.textContent = err.message || 'Invalid credentials or missing user role.';
       errEl.style.display = 'block';
-    } finally {
+      showToast(err.message || 'Sign-in failed.', 'danger');
       submitBtn.disabled = false;
+      googleBtn.disabled = false;
       submitBtn.textContent = 'Sign In';
     }
   });
 
-  slot.querySelector('#google-signin-btn').addEventListener('click', async () => {
+  googleBtn.addEventListener('click', async () => {
     errEl.style.display = 'none';
+    submitBtn.disabled = true;
+    googleBtn.disabled = true;
+    googleBtn.textContent = 'Signing in with Google...';
     try {
-      await loginWithGoogle();
-      showToast('Signed in with Google.', 'success');
+      const sessionResult = await loginWithGoogle();
+      window.dispatchEvent(new CustomEvent('smartattend:session-ready', { detail: sessionResult }));
     } catch (err) {
       errEl.textContent = err.message || 'Google sign-in failed.';
       errEl.style.display = 'block';
+      showToast(err.message || 'Google sign-in failed.', 'danger');
+      submitBtn.disabled = false;
+      googleBtn.disabled = false;
+      googleBtn.textContent = 'Continue with Google';
     }
   });
 }
@@ -204,17 +223,17 @@ function renderSignUpForm(slot) {
     submitBtn.textContent = 'Creating account...';
     try {
       const fd = new FormData(form);
-      await registerStudentAccount({
+      const sessionResult = await registerStudentAccount({
         name: fd.get('name'),
         rollNumber: fd.get('rollNumber'),
         email: fd.get('email'),
         password: fd.get('password'),
       });
       showToast('Account created. Verification link sent to your email.', 'success');
+      window.dispatchEvent(new CustomEvent('smartattend:session-ready', { detail: sessionResult }));
     } catch (err) {
       errEl.textContent = err.message || 'Registration failed.';
       errEl.style.display = 'block';
-    } finally {
       submitBtn.disabled = false;
       submitBtn.textContent = 'Create Account & Send Verification';
     }

@@ -2,15 +2,17 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { auth, db, testFirestoreConnection } from './firebase/config.js';
 import {
-  ensureUserProfileExists,
+  fetchVerifiedUserProfile,
+  isAuthFlowInProgress,
   loadRoleDocument,
   logoutUser,
 } from './services/authService.js';
 import { loadAcademicSettings } from './services/firestoreService.js';
 import { initForegroundMessaging } from './services/messagingService.js';
+import { resolveDashboardRoute, parseHashRoute } from './utils/authRouting.js';
 import { escapeHtml, getInitials } from './utils/attendanceMath.js';
 import { icon } from './utils/icons.js';
-import { getCurrentTheme, toggleTheme, showToast } from './utils/ui.js';
+import { getCurrentTheme, toggleTheme, showToast, closeModal } from './utils/ui.js';
 import { getState, setState } from './state/store.js';
 import { renderAuthView } from './views/authView.js';
 import { renderAdminView } from './views/adminView.js';
@@ -94,24 +96,70 @@ function startNotifListener(uid) {
   );
 }
 
-function renderWorkspaceShell() {
+function setHashSilently(nextHash) {
+  if (window.location.hash !== nextHash) {
+    window.history.replaceState(null, '', nextHash);
+  }
+}
+
+function renderWorkspaceShell(authError = '') {
   const appRoot = document.getElementById('app');
   const state = getState();
   const { firebaseUser, profile } = state;
 
-  if (!firebaseUser || !firebaseUser.emailVerified || !profile) {
+  if (!firebaseUser) {
     cleanupTeacherListeners();
     cleanupStudentListeners();
     stopNotifListener();
-    renderAuthView(appRoot, firebaseUser);
+    closeModal();
+    setHashSilently('#/login');
+    renderAuthView(appRoot, null, authError);
     return;
   }
 
-  const role = profile.role || 'student';
-  const navItems = NAV_BY_ROLE[role] || NAV_BY_ROLE.student;
+  if (!firebaseUser.emailVerified) {
+    cleanupTeacherListeners();
+    cleanupStudentListeners();
+    stopNotifListener();
+    closeModal();
+    setHashSilently('#/verify-email');
+    renderAuthView(appRoot, firebaseUser, authError);
+    return;
+  }
+
+  if (!profile) {
+    cleanupTeacherListeners();
+    cleanupStudentListeners();
+    stopNotifListener();
+    closeModal();
+    setHashSilently('#/login');
+    renderAuthView(
+      appRoot,
+      null,
+      authError || 'User profile could not be loaded from Firestore. Please sign in again.'
+    );
+    return;
+  }
+
+  let routeInfo;
+  try {
+    routeInfo = resolveDashboardRoute(profile, firebaseUser.uid);
+  } catch (roleErr) {
+    cleanupTeacherListeners();
+    cleanupStudentListeners();
+    stopNotifListener();
+    closeModal();
+    setHashSilently('#/login');
+    renderAuthView(appRoot, null, roleErr.message);
+    return;
+  }
+
+  const role = routeInfo.role;
+  const navItems = NAV_BY_ROLE[role];
   if (!navItems.some((i) => i.key === state.activeView)) {
     state.activeView = 'overview';
   }
+  setHashSilently(`#/${role}/${state.activeView}`);
   const activeItem = navItems.find((i) => i.key === state.activeView) || navItems[0];
   const theme = getCurrentTheme();
 
@@ -244,9 +292,10 @@ function renderWorkspaceShell() {
 function renderActiveRouteContent() {
   const viewport = document.getElementById('main-content');
   if (!viewport) return;
-  const { profile, activeView } = getState();
-  const role = profile?.role || 'student';
+  const { firebaseUser, profile, activeView } = getState();
+  if (!firebaseUser || !firebaseUser.emailVerified || !profile) return;
 
+  const { role } = resolveDashboardRoute(profile, firebaseUser.uid);
   if (role === 'admin') {
     renderAdminView(viewport, activeView);
   } else if (role === 'teacher') {
@@ -257,13 +306,90 @@ function renderActiveRouteContent() {
 }
 
 function navigateTo(viewKey) {
-  setState({ activeView: viewKey, sidebarOpen: false });
-  renderWorkspaceShell();
+  const { profile } = getState();
+  if (!profile) {
+    renderWorkspaceShell();
+    return;
+  }
+  const role = profile.role;
+  const navItems = NAV_BY_ROLE[role] || [];
+  const validView = navItems.some((i) => i.key === viewKey) ? viewKey : 'overview';
+  setState({ activeView: validView, sidebarOpen: false });
+  if (window.location.hash !== `#/${role}/${validView}`) {
+    window.location.hash = `#/${role}/${validView}`;
+  } else {
+    renderWorkspaceShell();
+  }
 }
 
 window.addEventListener('smartattend:navigate', (e) => {
   if (e.detail) navigateTo(String(e.detail));
 });
+
+window.addEventListener('hashchange', () => {
+  const { firebaseUser, profile } = getState();
+  if (!firebaseUser || !firebaseUser.emailVerified || !profile) {
+    renderWorkspaceShell();
+    return;
+  }
+  const parsed = parseHashRoute(window.location.hash);
+  const role = profile.role;
+  const navItems = NAV_BY_ROLE[role] || [];
+  if (parsed.type === 'dashboard' && parsed.role === role && navItems.some((i) => i.key === parsed.view)) {
+    setState({ activeView: parsed.view, sidebarOpen: false });
+    renderWorkspaceShell();
+  } else {
+    setHashSilently(`#/${role}/${getState().activeView || 'overview'}`);
+    renderWorkspaceShell();
+  }
+});
+
+async function activateVerifiedSession({ user, profile, roleData }, announceLogin = false) {
+  const route = resolveDashboardRoute(profile, user.uid);
+
+  if (!user.emailVerified) {
+    setState({
+      authReady: true,
+      firebaseUser: user,
+      profile,
+      roleData: roleData || null,
+      activeView: 'overview',
+    });
+    if (announceLogin) {
+      showToast(`Account signed in (${route.role}). Verify your email to enter your dashboard.`, 'warning', 5500);
+    }
+    renderWorkspaceShell();
+    return;
+  }
+
+  await loadAcademicSettings();
+  const parsedHash = parseHashRoute(window.location.hash);
+  const navItems = NAV_BY_ROLE[route.role] || [];
+  const initialView =
+    parsedHash.type === 'dashboard' &&
+    parsedHash.role === route.role &&
+    navItems.some((i) => i.key === parsedHash.view)
+      ? parsedHash.view
+      : route.view;
+
+  setState({
+    authReady: true,
+    firebaseUser: user,
+    profile,
+    roleData: roleData || null,
+    activeView: initialView,
+  });
+
+  startNotifListener(profile.uid);
+  initForegroundMessaging();
+  window.history.replaceState(null, '', `#/${route.role}/${initialView}`);
+  renderWorkspaceShell();
+
+  if (announceLogin) {
+    const label = route.role.charAt(0).toUpperCase() + route.role.slice(1);
+    showToast(`Signed in as ${profile.name} (${label} Dashboard).`, 'success');
+  }
+}
 
 async function handleAuthSync(firebaseUser) {
   if (!firebaseUser) {
@@ -279,20 +405,34 @@ async function handleAuthSync(firebaseUser) {
   }
 
   try {
-    await loadAcademicSettings();
-    const profile = await ensureUserProfileExists(firebaseUser);
+    const profile = await fetchVerifiedUserProfile(firebaseUser, {
+      allowBootstrapCreate: false,
+    });
     const roleData = await loadRoleDocument(profile);
-    setState({ authReady: true, firebaseUser, profile, roleData, activeView: 'overview' });
-    startNotifListener(profile.uid);
-    initForegroundMessaging();
-    renderWorkspaceShell();
+    await activateVerifiedSession({ user: firebaseUser, profile, roleData }, false);
   } catch (err) {
     console.error('Auth initialization error:', err);
-    showToast(err.message || 'Failed to load user profile. Check Firestore security rules.', 'danger', 7000);
-    setState({ authReady: true, firebaseUser, profile: null, roleData: null });
-    renderAuthView(document.getElementById('app'), firebaseUser);
+    const message = err?.message || 'Failed to load user profile and role from Firestore.';
+    await logoutUser().catch(() => {});
+    setState({ authReady: true, firebaseUser: null, profile: null, roleData: null, activeView: 'overview' });
+    showToast(message, 'danger', 7000);
+    renderWorkspaceShell(message);
   }
 }
+
+window.addEventListener('smartattend:session-ready', async (e) => {
+  const detail = e.detail;
+  if (!detail?.user || !detail?.profile) return;
+  try {
+    await activateVerifiedSession(detail, true);
+  } catch (err) {
+    const msg = err?.message || 'Unable to open dashboard for your account.';
+    await logoutUser().catch(() => {});
+    setState({ authReady: true, firebaseUser: null, profile: null, roleData: null });
+    showToast(msg, 'danger', 7000);
+    renderWorkspaceShell(msg);
+  }
+});
 
 window.addEventListener('smartattend:auth-refresh', () => {
   handleAuthSync(auth.currentUser);
@@ -301,6 +441,7 @@ window.addEventListener('smartattend:auth-refresh', () => {
 async function boot() {
   testFirestoreConnection();
   onAuthStateChanged(auth, (user) => {
+    if (isAuthFlowInProgress()) return;
     handleAuthSync(user);
   });
 }
