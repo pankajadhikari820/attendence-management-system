@@ -20,6 +20,8 @@ import {
   paginateItems,
 } from '../src/utils/attendanceMath.js';
 import {
+  BOOTSTRAPPED_ADMIN_EMAIL,
+  isBootstrapAdminEmail,
   DEFAULT_PERMISSIONS_OWNER,
   DEFAULT_PERMISSIONS_MEMBER,
   resolveMembershipPermissions,
@@ -323,8 +325,9 @@ function testSecurityAuditAndPermissionFixes() {
   // 1 & 2. Auth timing, ID token refresh, and missing profile healing
   assert.doesNotMatch(mainSrc, /testFirestoreConnection/, 'Must not probe /test/connection before auth');
   assert.match(mainSrc, /await auth\.authStateReady\(\)/, 'Boot must await auth.authStateReady()');
-  assert.match(mainSrc, /getIdToken\(true\)/, 'Auth sync must force-refresh ID token');
-  assert.match(authSrc, /getIdToken\(true\)/, 'Auth service must force-refresh ID token after login/verification');
+  assert.match(mainSrc, /validateAndRefreshAuthUser/, 'Auth sync must validate & refresh session tokens without swallowing HTTP 400');
+  assert.match(authSrc, /getIdToken\(forceTokenRefresh\)/, 'Auth service must refresh ID token via validateAndRefreshAuthUser');
+  assert.match(authSrc, /isInvalidSessionError/, 'Auth service must classify fatal Identity Toolkit session errors');
   assert.match(authSrc, /if \(!resolvedProfile\)[\s\S]*ensureGlobalUserProfile/, 'Must auto-heal missing users/{uid} doc');
 
   // 3. Organization creation guard & rule safety
@@ -353,6 +356,19 @@ function testSecurityAuditAndPermissionFixes() {
   assert.match(rules, /hasOrgPerm\(orgId, 'canApproveLeaves'\) && incoming\(\)\.status == 'on_leave'/);
   assert.match(rules, /hasOrgPerm\(orgId, 'canApproveCorrections'\)/);
   assert.match(rules, /incoming\(\)\.portalTier == 'member'/);
+  assert.match(rules, /\.get\('permissions', \{\}\)\.get\('canManageOrg', false\) == false/);
+  assert.match(rules, /\.get\('policies', \{\}\)\.get\('allowSelfCheckIn', false\) == true/);
+
+  // 10. Bootstrap admin, serialized session orchestration, and listener cleanup
+  assert.equal(BOOTSTRAPPED_ADMIN_EMAIL, 'pankajadhikari820@gmail.com');
+  assert.equal(isBootstrapAdminEmail('PankajAdhikari820@gmail.com '), true);
+  assert.equal(isBootstrapAdminEmail('other@example.com'), false);
+  assert.match(mainSrc, /enqueueSessionTask/, 'Session changes must run serially to prevent duplicate init');
+  assert.match(mainSrc, /cleanupForegroundMessaging/, 'Workspace cleanup must detach foreground FCM listener');
+  assert.match(mainSrc, /activeSessionSignature/, 'Must deduplicate identical active session activation');
+
+  const cfgSrc = fs.readFileSync('src/firebase/config.js', 'utf8');
+  assert.match(cfgSrc, /inMemoryPersistence/, 'Secondary auth must use inMemoryPersistence to prevent IndexedDB/channel contention');
 }
 
 testOrgIdsAndZeroPiiQr();

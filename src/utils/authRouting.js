@@ -1,5 +1,11 @@
 export const VALID_ROLES = Object.freeze(['owner', 'manager', 'member', 'admin', 'teacher', 'student']);
 
+export const BOOTSTRAPPED_ADMIN_EMAIL = 'pankajadhikari820@gmail.com';
+
+export function isBootstrapAdminEmail(email = '') {
+  return String(email || '').trim().toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL;
+}
+
 export const PUBLIC_ROUTES = Object.freeze([
   'home',
   'features',

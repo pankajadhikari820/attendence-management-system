@@ -38,7 +38,7 @@ service cloud.firestore {
     function isVerifiedMemberOfOrg(orgId) {
       return isVerified()
         && membershipExists(orgId, request.auth.uid)
-        && membershipData(orgId, request.auth.uid).status == 'active';
+        && membershipData(orgId, request.auth.uid).get('status', '') == 'active';
     }
 
     function isOrgCreator(orgId) {
@@ -128,9 +128,13 @@ service cloud.firestore {
             && incoming().isOwner == false
             && incoming().portalTier == 'member'
             && incoming().status in ['pending', 'active']
-            && incoming().permissions.canManageOrg == false
-            && incoming().permissions.canManageMembers == false
-            && incoming().permissions.canTakeAttendance == false)
+            && incoming().get('permissions', {}).get('canManageOrg', false) == false
+            && incoming().get('permissions', {}).get('canManageMembers', false) == false
+            && incoming().get('permissions', {}).get('canTakeAttendance', false) == false
+            && incoming().get('permissions', {}).get('canEditAttendance', false) == false
+            && incoming().get('permissions', {}).get('canApproveLeaves', false) == false
+            && incoming().get('permissions', {}).get('canApproveCorrections', false) == false
+            && incoming().get('permissions', {}).get('canViewAuditLogs', false) == false)
         );
 
         allow update: if isVerified() && isValidId(orgId) && (
@@ -260,7 +264,10 @@ service cloud.firestore {
           (request.auth.uid == memberUid
             && incoming().isOwner == false
             && incoming().portalTier == 'member'
-            && incoming().status in ['pending', 'active'])
+            && incoming().status in ['pending', 'active']
+            && incoming().get('permissions', {}).get('canManageOrg', false) == false
+            && incoming().get('permissions', {}).get('canManageMembers', false) == false
+            && incoming().get('permissions', {}).get('canTakeAttendance', false) == false)
         );
 
         allow update: if isVerifiedMemberOfOrg(orgId) && (
@@ -341,7 +348,7 @@ service cloud.firestore {
             (hasOrgPerm(orgId, 'canApproveLeaves') && incoming().status == 'on_leave') ||
             hasOrgPerm(orgId, 'canApproveCorrections') ||
             (incoming().memberUid == request.auth.uid
-              && get(/databases/$(database)/documents/organizations/$(orgId)).data.policies.allowSelfCheckIn == true)
+              && get(/databases/$(database)/documents/organizations/$(orgId)).data.get('policies', {}).get('allowSelfCheckIn', false) == true)
           );
 
         allow update: if isVerifiedMemberOfOrg(orgId) && (

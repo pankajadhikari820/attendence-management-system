@@ -1,5 +1,5 @@
 import { initializeApp, getApps } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import { getAuth, setPersistence, inMemoryPersistence } from 'firebase/auth';
 import {
   initializeFirestore,
   getFirestore,
@@ -47,7 +47,9 @@ export const functions = getFunctions(app, 'us-central1');
 export function getSecondaryAuth() {
   const existing = getApps().find((a) => a.name === 'adminProvisioner');
   const secondaryApp = existing || initializeApp(firebaseConfig, 'adminProvisioner');
-  return getAuth(secondaryApp);
+  const secAuth = getAuth(secondaryApp);
+  setPersistence(secAuth, inMemoryPersistence).catch(() => {});
+  return secAuth;
 }
 
 export async function testFirestoreConnection() {

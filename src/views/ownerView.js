@@ -616,15 +616,21 @@ async function renderOwnerOrgSettings(container) {
       const planId = btn.getAttribute('data-set-plan');
       const plan = SUBSCRIPTION_PLANS[planId];
       if (!plan) return;
-      const patch = {
-        plan: plan.id,
-        memberLimit: plan.maxMembers,
-        branchLimit: plan.maxBranches,
-      };
-      await updateOrganizationPolicies(activeOrgId, patch, { plan: activeOrg?.plan });
-      setState({ activeOrg: { ...activeOrg, ...patch } });
-      showToast(`Subscription tier set to ${plan.name}.`, 'success');
-      renderOwnerOrgSettings(container);
+      btn.disabled = true;
+      try {
+        const patch = {
+          plan: plan.id,
+          memberLimit: plan.maxMembers,
+          branchLimit: plan.maxBranches,
+        };
+        await updateOrganizationPolicies(activeOrgId, patch, { plan: activeOrg?.plan });
+        setState({ activeOrg: { ...activeOrg, ...patch } });
+        showToast(`Subscription tier set to ${plan.name}.`, 'success');
+        renderOwnerOrgSettings(container);
+      } catch (err) {
+        showToast(err.message || 'Unable to update subscription plan.', 'danger');
+        btn.disabled = false;
+      }
     });
   });
 }
@@ -1499,6 +1505,7 @@ async function renderOwnerMembers(container) {
             onMount(dialog) {
               dialog.querySelector('#edit-mem-form').addEventListener('submit', async (ev) => {
                 ev.preventDefault();
+                const submitBtn = dialog.querySelector('#edit-mem-form button[type="submit"]');
                 const fd = new FormData(ev.target);
                 const ext = String(fd.get('externalId') || '').trim();
                 if (
@@ -1510,24 +1517,30 @@ async function renderOwnerMembers(container) {
                   showToast(`Duplicate ID "${ext}" already exists.`, 'danger');
                   return;
                 }
-                await updateOrgMemberHierarchy(
-                  activeOrgId,
-                  m.uid,
-                  {
-                    name: String(fd.get('name')).trim(),
-                    externalId: ext,
-                    designationId: m.isOwner ? m.designationId : String(fd.get('designationId')),
-                    parentMemberId: String(fd.get('parentMemberId') || ''),
-                    branchId: String(fd.get('branchId')),
-                    departmentId: String(fd.get('departmentId')),
-                    shiftId: String(fd.get('shiftId')),
-                  },
-                  m,
-                  designations
-                );
-                closeModal();
-                showToast('Member updated.', 'success');
-                load();
+                if (submitBtn) submitBtn.disabled = true;
+                try {
+                  await updateOrgMemberHierarchy(
+                    activeOrgId,
+                    m.uid,
+                    {
+                      name: String(fd.get('name')).trim(),
+                      externalId: ext,
+                      designationId: m.isOwner ? m.designationId : String(fd.get('designationId')),
+                      parentMemberId: String(fd.get('parentMemberId') || ''),
+                      branchId: String(fd.get('branchId')),
+                      departmentId: String(fd.get('departmentId')),
+                      shiftId: String(fd.get('shiftId')),
+                    },
+                    m,
+                    designations
+                  );
+                  closeModal();
+                  showToast('Member updated.', 'success');
+                  load();
+                } catch (err) {
+                  showToast(err.message || 'Member update failed.', 'danger');
+                  if (submitBtn) submitBtn.disabled = false;
+                }
               });
             },
           });
@@ -1623,22 +1636,29 @@ async function renderOwnerMembers(container) {
         onMount(dialog) {
           dialog.querySelector('#inv-form').addEventListener('submit', async (e) => {
             e.preventDefault();
-            const fd = new FormData(e.target);
-            const desId = String(fd.get('designationId'));
-            const des = designations.find((d) => d.id === desId);
-            const inv = await createOrgInvitation(activeOrgId, {
-              email: fd.get('email'),
-              designationId: desId,
-              designationName: des?.name || 'Member',
-              departmentId: String(fd.get('departmentId')),
-              branchId: branches[0]?.id || 'branch_hq',
-              createdByUid: firebaseUser.uid,
-            });
-            closeModal();
-            const url = `${window.location.origin}/#/join/${inv.inviteCode}`;
-            await navigator.clipboard.writeText(url).catch(() => {});
-            showToast(`Invitation ${inv.inviteCode} created & link copied!`, 'success', 5500);
-            load();
+            const submitBtn = dialog.querySelector('#inv-form button[type="submit"]');
+            if (submitBtn) submitBtn.disabled = true;
+            try {
+              const fd = new FormData(e.target);
+              const desId = String(fd.get('designationId'));
+              const des = designations.find((d) => d.id === desId);
+              const inv = await createOrgInvitation(activeOrgId, {
+                email: fd.get('email'),
+                designationId: desId,
+                designationName: des?.name || 'Member',
+                departmentId: String(fd.get('departmentId')),
+                branchId: branches[0]?.id || 'branch_hq',
+                createdByUid: firebaseUser.uid,
+              });
+              closeModal();
+              const url = `${window.location.origin}/#/join/${inv.inviteCode}`;
+              await navigator.clipboard.writeText(url).catch(() => {});
+              showToast(`Invitation ${inv.inviteCode} created & link copied!`, 'success', 5500);
+              load();
+            } catch (err) {
+              showToast(err.message || 'Unable to generate invitation.', 'danger');
+              if (submitBtn) submitBtn.disabled = false;
+            }
           });
         },
       });

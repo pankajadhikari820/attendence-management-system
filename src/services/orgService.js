@@ -393,7 +393,10 @@ export async function loadOrganizationContext(uid, orgId) {
   const resolved = resolveMembershipPermissions(activeMembership, activeDesignation, activeMember);
 
   // Remember user's last active org
-  await updateDoc(doc(db, 'users', uid), { lastActiveOrgId: orgId }).catch(() => {});
+  await updateDoc(doc(db, 'users', uid), {
+    lastActiveOrgId: orgId,
+    updatedAt: serverTimestamp(),
+  }).catch(() => {});
 
   return {
     activeOrg,

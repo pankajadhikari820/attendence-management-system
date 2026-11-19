@@ -18,6 +18,7 @@ export function renderAuthView(container, options = {}) {
     mode = 'login', // 'login' | 'org-register' | 'join' | 'forgot-password' | 'verify-email' | 'select-org'
     firebaseUser = null,
     memberships = [],
+    isBootstrapAdmin = false,
     inviteCode = '',
     authError = '',
   } = options;
@@ -132,7 +133,7 @@ export function renderAuthView(container, options = {}) {
 
   const slot = container.querySelector('#auth-form-slot');
   if (activeTab === 'login') renderSignInForm(slot);
-  else if (activeTab === 'org-register') renderOrgRegisterForm(slot, firebaseUser);
+  else if (activeTab === 'org-register') renderOrgRegisterForm(slot, firebaseUser, isBootstrapAdmin);
   else if (activeTab === 'join') renderJoinOrgForm(slot, firebaseUser, inviteCode);
   else renderResetForm(slot);
 }
@@ -186,9 +187,14 @@ function renderSignInForm(slot) {
       errEl.textContent = err.message || 'Sign-in failed.';
       errEl.style.display = 'block';
       showToast(err.message || 'Sign-in failed.', 'danger');
-      submitBtn.disabled = false;
-      googleBtn.disabled = false;
-      submitBtn.textContent = 'Sign In';
+    } finally {
+      if (submitBtn.isConnected) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Sign In';
+      }
+      if (googleBtn.isConnected) {
+        googleBtn.disabled = false;
+      }
     }
   });
 
@@ -204,14 +210,19 @@ function renderSignInForm(slot) {
       errEl.textContent = err.message || 'Google sign-in failed.';
       errEl.style.display = 'block';
       showToast(err.message || 'Google sign-in failed.', 'danger');
-      submitBtn.disabled = false;
-      googleBtn.disabled = false;
-      googleBtn.textContent = 'Continue with Google';
+    } finally {
+      if (submitBtn.isConnected) {
+        submitBtn.disabled = false;
+      }
+      if (googleBtn.isConnected) {
+        googleBtn.disabled = false;
+        googleBtn.textContent = 'Continue with Google';
+      }
     }
   });
 }
 
-function renderOrgRegisterForm(slot, existingUser) {
+function renderOrgRegisterForm(slot, existingUser, isBootstrapAdmin = false) {
   const defaultTz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   slot.innerHTML = `
     <form id="org-reg-form" class="stack-md">
@@ -245,7 +256,7 @@ function renderOrgRegisterForm(slot, existingUser) {
       </div>
       ${
         existingUser
-          ? `<div class="notice"><span style="font-size:0.8125rem;color:var(--text-secondary);">Provisioning workspace under signed-in account <strong>${escapeHtml(existingUser.email)}</strong>.</span></div>`
+          ? `<div class="notice ${isBootstrapAdmin ? 'notice-success' : ''}"><span style="font-size:0.8125rem;color:var(--text-secondary);">Provisioning workspace under ${isBootstrapAdmin ? 'bootstrapped admin ' : 'signed-in '}account <strong>${escapeHtml(existingUser.email)}</strong>.</span></div>`
           : `
         <div class="form-grid form-grid-2">
           <div class="field">
@@ -462,13 +473,25 @@ function renderVerificationGate(container, firebaseUser) {
     </main>
   `;
 
-  container.querySelector('#verify-refresh-btn').addEventListener('click', async () => {
-    const ok = await refreshVerificationStatus();
-    if (ok) {
-      showToast('Email verified! Opening workspace...', 'success');
-      window.dispatchEvent(new CustomEvent('smartattend:auth-refresh'));
-    } else {
-      showToast('Email is not verified yet. Click the link in your inbox first.', 'warning');
+  const refreshBtn = container.querySelector('#verify-refresh-btn');
+  refreshBtn.addEventListener('click', async () => {
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = 'Checking verification...';
+    try {
+      const ok = await refreshVerificationStatus();
+      if (ok) {
+        showToast('Email verified! Opening workspace...', 'success');
+        window.dispatchEvent(new CustomEvent('smartattend:auth-refresh'));
+      } else {
+        showToast('Email is not verified yet. Click the link in your inbox first.', 'warning');
+      }
+    } catch (err) {
+      showToast(err.message || 'Unable to refresh verification status.', 'danger');
+    } finally {
+      if (refreshBtn.isConnected) {
+        refreshBtn.disabled = false;
+        refreshBtn.textContent = "I've Verified — Refresh";
+      }
     }
   });
 
@@ -481,7 +504,10 @@ function renderVerificationGate(container, firebaseUser) {
     }
   });
 
-  container.querySelector('#verify-logout-btn').addEventListener('click', () => logoutUser());
+  container.querySelector('#verify-logout-btn').addEventListener('click', async () => {
+    await logoutUser().catch(() => {});
+    window.location.hash = '#/';
+  });
 }
 
 function renderOrgSelectorGate(container, firebaseUser, memberships = []) {
@@ -521,7 +547,10 @@ function renderOrgSelectorGate(container, firebaseUser, memberships = []) {
     </main>
   `;
 
-  container.querySelector('#orgsel-logout').addEventListener('click', () => logoutUser());
+  container.querySelector('#orgsel-logout').addEventListener('click', async () => {
+    await logoutUser().catch(() => {});
+    window.location.hash = '#/';
+  });
   container.querySelector('#orgsel-create').addEventListener('click', () => {
     window.location.hash = '#/org-register';
   });

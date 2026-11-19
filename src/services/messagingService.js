@@ -3,17 +3,27 @@ import { app } from '../firebase/config.js';
 import { showToast } from '../utils/ui.js';
 
 let messagingInstance = null;
+let foregroundUnsub = null;
+
+export function cleanupForegroundMessaging() {
+  if (foregroundUnsub) {
+    foregroundUnsub();
+    foregroundUnsub = null;
+  }
+}
 
 export async function initForegroundMessaging() {
   try {
     const supported = await isSupported();
     if (!supported) return { supported: false, reason: 'Browser does not support Web Push API.' };
-    messagingInstance = getMessaging(app);
-    onMessage(messagingInstance, (payload) => {
-      const title = payload?.notification?.title || 'SmartAttend Alert';
-      const body = payload?.notification?.body || '';
-      showToast(`${title}${body ? ': ' + body : ''}`, 'info', 6000);
-    });
+    if (!messagingInstance) messagingInstance = getMessaging(app);
+    if (!foregroundUnsub) {
+      foregroundUnsub = onMessage(messagingInstance, (payload) => {
+        const title = payload?.notification?.title || 'SmartAttend Alert';
+        const body = payload?.notification?.body || '';
+        showToast(`${title}${body ? ': ' + body : ''}`, 'info', 6000);
+      });
+    }
     return { supported: true };
   } catch (err) {
     return { supported: false, reason: err.message };

@@ -4,11 +4,13 @@ import { auth } from './firebase/config.js';
 import {
   isAuthFlowInProgress,
   resolvePostLoginSession,
+  validateAndRefreshAuthUser,
+  isBootstrapAdminEmail,
   logoutUser,
 } from './services/authService.js';
 import { loadOrganizationContext } from './services/orgService.js';
 import { orgCol } from './services/firestoreService.js';
-import { initForegroundMessaging } from './services/messagingService.js';
+import { initForegroundMessaging, cleanupForegroundMessaging } from './services/messagingService.js';
 import { resolveDashboardRoute, parseHashRoute } from './utils/authRouting.js';
 import { escapeHtml, getInitials } from './utils/attendanceMath.js';
 import { icon } from './utils/icons.js';
@@ -115,6 +117,7 @@ function cleanupAllWorkspaceListeners() {
   cleanupManagerListeners();
   cleanupMemberListeners();
   stopNotifListener();
+  cleanupForegroundMessaging();
   closeModal();
 }
 
@@ -160,6 +163,7 @@ function renderWorkspaceShell(authError = '') {
     renderAuthView(appRoot, {
       mode: parsed.page,
       firebaseUser,
+      isBootstrapAdmin: state.isBootstrapAdmin,
       inviteCode: parsed.inviteCode || '',
       authError,
     });
@@ -171,10 +175,21 @@ function renderWorkspaceShell(authError = '') {
     cleanupAllWorkspaceListeners();
     if (memberships.length > 0) {
       setHashSilently('#/select-org');
-      renderAuthView(appRoot, { mode: 'select-org', firebaseUser, memberships, authError });
+      renderAuthView(appRoot, {
+        mode: 'select-org',
+        firebaseUser,
+        memberships,
+        isBootstrapAdmin: state.isBootstrapAdmin,
+        authError,
+      });
     } else {
       setHashSilently('#/org-register');
-      renderAuthView(appRoot, { mode: 'org-register', firebaseUser, authError });
+      renderAuthView(appRoot, {
+        mode: 'org-register',
+        firebaseUser,
+        isBootstrapAdmin: state.isBootstrapAdmin,
+        authError,
+      });
     }
     return;
   }
@@ -252,7 +267,7 @@ function renderWorkspaceShell(authError = '') {
           </div>
           <div style="min-width:0;flex:1;">
             <div class="truncate" style="font-size:0.875rem;font-weight:600;">${escapeHtml(displayName)}</div>
-            <div class="truncate mono" style="font-size:0.72rem;color:var(--text-muted);">${escapeHtml(activeMember?.memberPublicId || '')}</div>
+            <div class="truncate mono" style="font-size:0.72rem;color:var(--text-muted);">${escapeHtml(activeMember?.memberPublicId || '')}${state.isBootstrapAdmin ? ' · Bootstrap Admin' : ''}</div>
           </div>
           <button type="button" class="icon-btn" id="logout-btn" title="Sign Out" aria-label="Sign Out">
             ${icon('logout', 16)}
@@ -324,8 +339,9 @@ function renderWorkspaceShell(authError = '') {
   });
 
   document.getElementById('logout-btn')?.addEventListener('click', async () => {
+    activeSessionSignature = '';
     cleanupAllWorkspaceListeners();
-    await logoutUser();
+    await logoutUser().catch(() => {});
     resetWorkspaceState();
     window.location.hash = '#/';
     showToast('Signed out.', 'info');
@@ -398,16 +414,43 @@ window.addEventListener('hashchange', () => {
   }
 });
 
+let sessionQueue = Promise.resolve();
+function enqueueSessionTask(task) {
+  const run = sessionQueue.then(task, task);
+  sessionQueue = run.catch(() => {});
+  return run;
+}
+
+let activeSessionSignature = '';
+
+async function resetToLoginWithError(msg) {
+  activeSessionSignature = '';
+  cleanupAllWorkspaceListeners();
+  await logoutUser().catch(() => {});
+  resetWorkspaceState();
+  setState({ authReady: true, firebaseUser: null });
+  showToast(msg, 'danger', 7000);
+  setHashSilently('#/login');
+  renderWorkspaceShell(msg);
+}
+
 async function activateSessionPayload(sessionPayload, announce = false) {
   const { user } = sessionPayload;
+  const bootstrapAdmin = Boolean(
+    sessionPayload.isBootstrapAdmin ?? (user?.emailVerified && isBootstrapAdminEmail(user?.email))
+  );
 
   if (sessionPayload.requiresVerification || !user.emailVerified) {
-    setState({ authReady: true, firebaseUser: user });
+    activeSessionSignature = '';
+    cleanupAllWorkspaceListeners();
+    setState({ authReady: true, firebaseUser: user, isBootstrapAdmin: false });
     renderWorkspaceShell();
     return;
   }
 
   if (sessionPayload.needsOrgOnboarding) {
+    activeSessionSignature = '';
+    cleanupAllWorkspaceListeners();
     setState({
       authReady: true,
       firebaseUser: user,
@@ -415,13 +458,20 @@ async function activateSessionPayload(sessionPayload, announce = false) {
       memberships: [],
       activeOrgId: '',
       activeOrg: null,
+      isBootstrapAdmin: bootstrapAdmin,
     });
-    window.location.hash = '#/org-register';
-    renderWorkspaceShell('Complete organization setup or join an organization using an invite code.');
+    setHashSilently('#/org-register');
+    renderWorkspaceShell(
+      bootstrapAdmin
+        ? `Bootstrapped admin (${user.email}) verified. Create or join an organization workspace to continue.`
+        : 'Complete organization setup or join an organization using an invite code.'
+    );
     return;
   }
 
   if (sessionPayload.needsOrgSelection) {
+    activeSessionSignature = '';
+    cleanupAllWorkspaceListeners();
     setState({
       authReady: true,
       firebaseUser: user,
@@ -429,15 +479,22 @@ async function activateSessionPayload(sessionPayload, announce = false) {
       memberships: sessionPayload.memberships || [],
       activeOrgId: '',
       activeOrg: null,
+      isBootstrapAdmin: bootstrapAdmin,
     });
-    window.location.hash = '#/select-org';
+    setHashSilently('#/select-org');
     renderWorkspaceShell();
     return;
   }
 
   const tier = sessionPayload.resolvedTier || 'member';
-  const navItems = getNavItemsForSession(tier, sessionPayload.resolvedPermissions);
+  const nextSignature = `${user.uid}:${sessionPayload.activeOrgId}:${tier}:${Boolean(user.emailVerified)}`;
   const parsedHash = parseHashRoute(window.location.hash);
+  const alreadyMounted =
+    activeSessionSignature === nextSignature &&
+    getState().activeOrgId === sessionPayload.activeOrgId &&
+    !(parsedHash.type === 'auth' && ['org-register', 'join', 'select-org'].includes(parsedHash.page));
+
+  const navItems = getNavItemsForSession(tier, sessionPayload.resolvedPermissions);
   const initialView =
     parsedHash.type === 'dashboard' &&
     parsedHash.role === tier &&
@@ -458,12 +515,19 @@ async function activateSessionPayload(sessionPayload, announce = false) {
     resolvedTier: tier,
     resolvedPermissions: sessionPayload.resolvedPermissions,
     settings: sessionPayload.settings,
+    isBootstrapAdmin: bootstrapAdmin,
     activeView: initialView,
   });
 
+  if (alreadyMounted) {
+    setHashSilently(`#/${tier}/${getState().activeView || initialView}`);
+    return;
+  }
+
+  activeSessionSignature = nextSignature;
   startOrgNotifListener(sessionPayload.activeOrgId, user.uid);
   initForegroundMessaging();
-  window.history.replaceState(null, '', `#/${tier}/${initialView}`);
+  setHashSilently(`#/${tier}/${initialView}`);
   renderWorkspaceShell();
 
   if (announce) {
@@ -472,26 +536,31 @@ async function activateSessionPayload(sessionPayload, announce = false) {
 }
 
 let authSyncSeq = 0;
-async function handleAuthSync(firebaseUser) {
+async function handleAuthSync(firebaseUser, { forceTokenSync = true } = {}) {
   const seq = ++authSyncSeq;
   if (!firebaseUser) {
+    activeSessionSignature = '';
+    cleanupAllWorkspaceListeners();
     resetWorkspaceState();
     setState({ authReady: true, firebaseUser: null });
     renderWorkspaceShell();
     return;
   }
 
-  await firebaseUser.reload().catch(() => {});
-  await firebaseUser.getIdToken(true).catch(() => {});
-  if (seq !== authSyncSeq) return;
-
-  if (!firebaseUser.emailVerified) {
-    setState({ authReady: true, firebaseUser });
-    renderWorkspaceShell();
-    return;
-  }
-
   try {
+    if (forceTokenSync) {
+      await validateAndRefreshAuthUser(firebaseUser, { forceReload: true, forceTokenRefresh: true });
+    }
+    if (seq !== authSyncSeq) return;
+
+    if (!firebaseUser.emailVerified) {
+      activeSessionSignature = '';
+      cleanupAllWorkspaceListeners();
+      setState({ authReady: true, firebaseUser, isBootstrapAdmin: false });
+      renderWorkspaceShell();
+      return;
+    }
+
     const session = await resolvePostLoginSession(firebaseUser);
     if (seq !== authSyncSeq) return;
     await activateSessionPayload(session, false);
@@ -499,53 +568,64 @@ async function handleAuthSync(firebaseUser) {
     if (seq !== authSyncSeq) return;
     console.error('Session initialization error:', err);
     const msg = err?.message || 'Unable to verify organization membership.';
-    await logoutUser().catch(() => {});
-    resetWorkspaceState();
-    setState({ authReady: true, firebaseUser: null });
-    showToast(msg, 'danger', 7000);
-    window.location.hash = '#/login';
-    renderWorkspaceShell(msg);
+    await resetToLoginWithError(msg);
   }
 }
 
-window.addEventListener('smartattend:session-ready', async (e) => {
+window.addEventListener('smartattend:session-ready', (e) => {
   const detail = e.detail;
   if (!detail?.user) return;
-  try {
-    await activateSessionPayload(detail, true);
-  } catch (err) {
-    const msg = err?.message || 'Unable to launch workspace.';
-    await logoutUser().catch(() => {});
-    resetWorkspaceState();
-    setState({ authReady: true, firebaseUser: null });
-    showToast(msg, 'danger', 7000);
-    window.location.hash = '#/login';
-    renderWorkspaceShell(msg);
-  }
+  const seq = ++authSyncSeq;
+  enqueueSessionTask(async () => {
+    if (seq !== authSyncSeq) return;
+    try {
+      await activateSessionPayload(detail, true);
+    } catch (err) {
+      if (seq !== authSyncSeq) return;
+      console.error('Session launch error:', err);
+      await resetToLoginWithError(err?.message || 'Unable to launch workspace.');
+    }
+  });
 });
 
 window.addEventListener('smartattend:auth-refresh', () => {
-  handleAuthSync(auth.currentUser);
+  enqueueSessionTask(() => handleAuthSync(auth.currentUser, { forceTokenSync: true }));
 });
 
-window.addEventListener('smartattend:switch-org', async (e) => {
+window.addEventListener('smartattend:switch-org', (e) => {
   const targetOrgId = e.detail;
-  const user = auth.currentUser;
-  if (!user || !targetOrgId) return;
-  try {
-    const ctx = await loadOrganizationContext(user.uid, targetOrgId);
-    await activateSessionPayload({ user, memberships: getState().memberships, activeOrgId: targetOrgId, ...ctx }, true);
-  } catch (err) {
-    showToast(err.message || 'Unable to switch organization.', 'danger');
-  }
+  enqueueSessionTask(async () => {
+    const user = auth.currentUser;
+    if (!user || !targetOrgId) return;
+    try {
+      activeSessionSignature = '';
+      const ctx = await loadOrganizationContext(user.uid, targetOrgId);
+      await activateSessionPayload(
+        {
+          user,
+          memberships: getState().memberships,
+          activeOrgId: targetOrgId,
+          isBootstrapAdmin: getState().isBootstrapAdmin,
+          ...ctx,
+        },
+        true
+      );
+    } catch (err) {
+      showToast(err.message || 'Unable to switch organization.', 'danger');
+    }
+  });
 });
 
 async function boot() {
   initPwaAndNetwork((online) => setState({ isOnline: online }));
-  await auth.authStateReady();
+  try {
+    await auth.authStateReady();
+  } catch (err) {
+    console.warn('Auth state readiness warning:', err?.message);
+  }
   onAuthStateChanged(auth, (user) => {
     if (isAuthFlowInProgress()) return;
-    handleAuthSync(user);
+    enqueueSessionTask(() => handleAuthSync(user, { forceTokenSync: Boolean(user) }));
   });
 }
 

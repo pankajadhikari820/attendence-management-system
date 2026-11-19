@@ -4,6 +4,7 @@ const initialState = {
   authReady: false,
   firebaseUser: null,
   userProfile: null,
+  isBootstrapAdmin: false,
   memberships: [], // [{ orgId, orgName, orgType, portalTier, designationId, designationName, isOwner, status, permissions, memberPublicId }]
   activeOrgId: '',
   activeOrg: null, // organizations/{orgId}
@@ -41,6 +42,7 @@ export function setState(patch) {
 export function resetWorkspaceState() {
   setState({
     userProfile: null,
+    isBootstrapAdmin: false,
     memberships: [],
     activeOrgId: '',
     activeOrg: null,
