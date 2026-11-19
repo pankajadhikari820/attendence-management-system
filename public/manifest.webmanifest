@@ -1,0 +1,35 @@
+{
+  "name": "SmartAttend — Universal Attendance SaaS",
+  "short_name": "SmartAttend",
+  "description": "Multi-organization attendance management SaaS with dynamic custom hierarchies, secure QR IDs, shifts, leave approvals, and analytics.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#1d4ed8",
+  "background_color": "#f8fafc",
+  "categories": ["business", "education", "productivity"],
+  "icons": [
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

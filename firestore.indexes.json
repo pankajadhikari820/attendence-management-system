@@ -12,16 +12,24 @@
       "collectionGroup": "attendanceRecords",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "studentUid", "order": "ASCENDING" },
-        { "fieldPath": "subjectId", "order": "ASCENDING" }
+        { "fieldPath": "memberUid", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "DESCENDING" }
       ]
     },
     {
-      "collectionGroup": "attendanceSessions",
+      "collectionGroup": "attendanceRecords",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "teacherId", "order": "ASCENDING" },
+        { "fieldPath": "departmentId", "order": "ASCENDING" },
         { "fieldPath": "date", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "members",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "departmentId", "order": "ASCENDING" }
       ]
     }
   ],

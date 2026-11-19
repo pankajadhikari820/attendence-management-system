@@ -1,28 +1,39 @@
 import { updateProfile } from 'firebase/auth';
-import { auth } from '../firebase/config.js';
+import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { auth, db } from '../firebase/config.js';
 import {
-  fetchCollection,
-  updateDocById,
+  fetchOrgCollection,
+  updateOrgDoc,
   where,
   orderBy,
   limit,
 } from '../services/firestoreService.js';
 import { uploadAttachment } from '../services/storageService.js';
 import { registerPushToken } from '../services/messagingService.js';
-import { escapeHtml, formatDateTime, getInitials, paginateItems } from '../utils/attendanceMath.js';
+import { escapeHtml, formatDateTime, getInitials } from '../utils/attendanceMath.js';
 import { icon } from '../utils/icons.js';
+import { canInstallPwa, isIosSafari, isRunningStandalone, triggerPwaInstall } from '../utils/pwa.js';
 import { showToast, renderEmptyState, renderTableSkeleton } from '../utils/ui.js';
 import { getState, setState } from '../state/store.js';
 
 export async function renderProfileView(container) {
-  const { profile, roleData } = getState();
+  const { userProfile, activeOrgId, activeMember, activeOrg } = getState();
+  const displayName = activeMember?.name || userProfile?.name || 'Member';
+  const email = activeMember?.email || userProfile?.email || '';
+  const showInstall = !isRunningStandalone() && (canInstallPwa() || isIosSafari());
+
   container.innerHTML = `
     <div class="stack-lg">
       <div class="page-header">
         <div>
           <h1 class="page-title">Profile &amp; Preferences</h1>
-          <p class="page-subtitle">Manage your personal details, avatar, and push notifications.</p>
+          <p class="page-subtitle">Manage your identity, avatar, app installation, and push alerts in ${escapeHtml(activeOrg?.name || activeOrgId)}.</p>
         </div>
+        ${
+          showInstall
+            ? `<div class="page-actions"><button type="button" class="btn btn-secondary" id="prof-install-pwa">${icon('smartphone', 16)} Install App</button></div>`
+            : ''
+        }
       </div>
 
       <div class="grid-2">
@@ -30,19 +41,18 @@ export async function renderProfileView(container) {
           <div style="display:flex;align-items:center;gap:1rem;">
             <div class="avatar-circle" style="width:56px;height:56px;font-size:1.125rem;">
               ${
-                profile.avatarUrl
-                  ? `<img src="${escapeHtml(profile.avatarUrl)}" alt="${escapeHtml(profile.name)}" referrerpolicy="no-referrer" />`
-                  : escapeHtml(getInitials(profile.name))
+                userProfile?.avatarUrl
+                  ? `<img src="${escapeHtml(userProfile.avatarUrl)}" alt="${escapeHtml(displayName)}" referrerpolicy="no-referrer" />`
+                  : escapeHtml(getInitials(displayName))
               }
             </div>
             <div>
-              <h2 style="font-size:1.125rem;">${escapeHtml(profile.name)}</h2>
+              <h2 style="font-size:1.125rem;">${escapeHtml(displayName)}</h2>
               <div class="meta-line">
-                <span>${escapeHtml(profile.email)}</span>
+                <span>${escapeHtml(email)}</span>
                 <span aria-hidden="true">·</span>
-                <span style="text-transform:capitalize;">${escapeHtml(profile.role)}</span>
-                ${roleData?.rollNumber ? `<span aria-hidden="true">·</span><span class="mono">${escapeHtml(roleData.rollNumber)}</span>` : ''}
-                ${roleData?.employeeId ? `<span aria-hidden="true">·</span><span class="mono">${escapeHtml(roleData.employeeId)}</span>` : ''}
+                <span>${escapeHtml(activeMember?.designationName || 'Member')}</span>
+                ${activeMember?.memberPublicId ? `<span aria-hidden="true">·</span><span class="mono">${escapeHtml(activeMember.memberPublicId)}</span>` : ''}
               </div>
             </div>
           </div>
@@ -50,7 +60,11 @@ export async function renderProfileView(container) {
           <form id="profile-update-form" class="stack-md">
             <div class="field">
               <label class="field-label" for="prof-name">Display Name</label>
-              <input class="input" id="prof-name" name="name" required value="${escapeHtml(profile.name)}" maxlength="80" />
+              <input class="input" id="prof-name" name="name" required value="${escapeHtml(displayName)}" maxlength="80" />
+            </div>
+            <div class="field">
+              <label class="field-label" for="prof-phone">Phone Number</label>
+              <input class="input" id="prof-phone" name="phone" value="${escapeHtml(activeMember?.phone || '')}" maxlength="30" placeholder="+91 98765 43210" />
             </div>
             <div class="field">
               <label class="field-label" for="prof-avatar">Profile Photo (JPG/PNG/WebP, max 5 MB)</label>
@@ -63,13 +77,13 @@ export async function renderProfileView(container) {
         <section class="panel stack-md">
           <div>
             <h2 class="panel-title">Firebase Cloud Messaging (Web Push)</h2>
-            <p class="panel-meta">Receive background alerts for low attendance, session starts, and request approvals.</p>
+            <p class="panel-meta">Receive alerts for low attendance, leave approvals, and correction updates.</p>
           </div>
           <form id="fcm-form" class="stack-md">
             <div class="field">
               <label class="field-label" for="fcm-vapid">Firebase Web Push Certificate (VAPID Key)</label>
               <input class="input mono" id="fcm-vapid" name="vapidKey" placeholder="Paste VAPID public key from Firebase Console" />
-              <span class="field-hint">Optional: Configure in Firebase Console &gt; Project Settings &gt; Cloud Messaging &gt; Web Push certificates.</span>
+              <span class="field-hint">Configure in Firebase Console &gt; Project Settings &gt; Cloud Messaging &gt; Web Push certificates.</span>
             </div>
             <button type="submit" class="btn btn-secondary">Enable Browser Push Notifications</button>
           </form>
@@ -77,6 +91,8 @@ export async function renderProfileView(container) {
       </div>
     </div>
   `;
+
+  container.querySelector('#prof-install-pwa')?.addEventListener('click', () => triggerPwaInstall());
 
   container.querySelector('#profile-update-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -86,23 +102,29 @@ export async function renderProfileView(container) {
     try {
       const fd = new FormData(e.target);
       const name = String(fd.get('name')).trim();
+      const phone = String(fd.get('phone') || '').trim();
       const file = fd.get('avatar');
-      let avatarUrl = profile.avatarUrl || '';
+      let avatarUrl = userProfile?.avatarUrl || '';
       if (file && file.size > 0) {
-        const uploaded = await uploadAttachment('avatars', profile.uid, file);
+        const uploaded = await uploadAttachment('avatars', auth.currentUser.uid, file);
         avatarUrl = uploaded.downloadUrl;
       }
       if (auth.currentUser) {
         await updateProfile(auth.currentUser, { displayName: name, photoURL: avatarUrl || null });
       }
-      await updateDocById('users', profile.uid, { name, avatarUrl });
-      if (profile.role === 'student') {
-        await updateDocById('students', profile.uid, { name }).catch(() => {});
-      } else if (profile.role === 'teacher') {
-        await updateDocById('teachers', profile.uid, { name }).catch(() => {});
+      await updateDoc(doc(db, 'users', auth.currentUser.uid), {
+        name,
+        avatarUrl,
+        updatedAt: serverTimestamp(),
+      });
+      if (activeOrgId && activeMember) {
+        await updateOrgDoc(activeOrgId, 'members', auth.currentUser.uid, { name, phone });
       }
-      setState({ profile: { ...profile, name, avatarUrl } });
-      showToast('Profile updated successfully.', 'success');
+      setState({
+        userProfile: { ...userProfile, name, avatarUrl },
+        activeMember: activeMember ? { ...activeMember, name, phone } : null,
+      });
+      showToast('Profile updated.', 'success');
       renderProfileView(container);
     } catch (err) {
       showToast(err.message || 'Failed to update profile.', 'danger');
@@ -116,8 +138,11 @@ export async function renderProfileView(container) {
     const vapidKey = new FormData(e.target).get('vapidKey');
     try {
       const token = await registerPushToken(vapidKey);
-      await updateDocById('users', profile.uid, { fcmToken: token });
-      showToast('Web Push notifications enabled for this device.', 'success');
+      await updateDoc(doc(db, 'users', auth.currentUser.uid), {
+        fcmToken: token,
+        updatedAt: serverTimestamp(),
+      });
+      showToast('Web Push notifications enabled.', 'success');
     } catch (err) {
       showToast(err.message || 'Could not enable push notifications.', 'warning');
     }
@@ -125,13 +150,13 @@ export async function renderProfileView(container) {
 }
 
 export async function renderNotificationsView(container) {
-  const { profile } = getState();
+  const { activeOrgId, firebaseUser } = getState();
   container.innerHTML = `
     <div class="stack-lg">
       <div class="page-header">
         <div>
           <h1 class="page-title">Notifications</h1>
-          <p class="page-subtitle">Real-time attendance alerts, leave updates, and correction decisions.</p>
+          <p class="page-subtitle">Organization attendance alerts, leave updates, and correction decisions.</p>
         </div>
         <div class="page-actions">
           <button type="button" class="btn btn-secondary" id="notif-mark-all">Mark All Read</button>
@@ -144,13 +169,14 @@ export async function renderNotificationsView(container) {
   async function load() {
     const slot = container.querySelector('#notif-list-slot');
     try {
-      const list = await fetchCollection('notifications', [
-        where('userId', '==', profile.uid),
+      const list = await fetchOrgCollection(activeOrgId, 'notifications', [
+        where('userId', '==', firebaseUser.uid),
         orderBy('createdAt', 'desc'),
         limit(50),
       ]).catch(async () => {
-        // Fallback if composite index not yet deployed
-        const all = await fetchCollection('notifications', [where('userId', '==', profile.uid)]);
+        const all = await fetchOrgCollection(activeOrgId, 'notifications', [
+          where('userId', '==', firebaseUser.uid),
+        ]);
         return all.sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
       });
 
@@ -162,7 +188,7 @@ export async function renderNotificationsView(container) {
       if (list.length === 0) {
         slot.innerHTML = renderEmptyState({
           title: 'No notifications yet',
-          description: 'Threshold warnings, leave approvals, and correction updates will appear here.',
+          description: 'Threshold alerts, leave approvals, and attendance decisions appear here.',
         });
         return;
       }
@@ -172,7 +198,7 @@ export async function renderNotificationsView(container) {
           ${list
             .map(
               (n) => `
-            <article class="panel" style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start;${n.read ? 'opacity:0.78;' : ''}">
+            <article class="panel" style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start;${n.read ? 'opacity:0.75;' : ''}">
               <div class="stack-sm" style="gap:0.25rem;">
                 <div style="display:flex;align-items:center;gap:0.5rem;">
                   <strong style="font-size:0.9375rem;">${escapeHtml(n.title)}</strong>
@@ -199,16 +225,15 @@ export async function renderNotificationsView(container) {
 
       slot.querySelectorAll('[data-mark-read]').forEach((btn) => {
         btn.addEventListener('click', async () => {
-          const id = btn.getAttribute('data-mark-read');
-          await updateDocById('notifications', id, { read: true });
+          await updateOrgDoc(activeOrgId, 'notifications', btn.getAttribute('data-mark-read'), { read: true });
           load();
         });
       });
 
       container.querySelector('#notif-mark-all').onclick = async () => {
         const unread = list.filter((n) => !n.read);
-        await Promise.all(unread.map((n) => updateDocById('notifications', n.id, { read: true })));
-        showToast('All notifications marked as read.', 'success');
+        await Promise.all(unread.map((n) => updateOrgDoc(activeOrgId, 'notifications', n.id, { read: true })));
+        showToast('All notifications marked read.', 'success');
         load();
       };
     } catch (err) {
@@ -217,219 +242,4 @@ export async function renderNotificationsView(container) {
   }
 
   load();
-}
-
-export async function renderAnnouncementsFeedView(container) {
-  const { profile } = getState();
-  container.innerHTML = `
-    <div class="stack-lg">
-      <div class="page-header">
-        <div>
-          <h1 class="page-title">Announcements</h1>
-          <p class="page-subtitle">Official institutional notices and policy updates.</p>
-        </div>
-      </div>
-      <div id="ann-feed-slot">${renderTableSkeleton(2, 3)}</div>
-    </div>
-  `;
-
-  try {
-    const all = await fetchCollection('announcements');
-    const filtered = all
-      .filter((a) => a.audience === 'all' || a.audience === `${profile.role}s` || profile.role === 'admin')
-      .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
-
-    const slot = container.querySelector('#ann-feed-slot');
-    if (filtered.length === 0) {
-      slot.innerHTML = renderEmptyState({
-        title: 'No announcements published',
-        description: 'Institutional notices from administration will appear here.',
-      });
-      return;
-    }
-
-    slot.innerHTML = `
-      <div class="stack-md">
-        ${filtered
-          .map(
-            (a) => `
-          <article class="panel stack-sm">
-            <div style="display:flex;justify-content:space-between;gap:0.75rem;align-items:flex-start;">
-              <h2 style="font-size:1.0625rem;">${escapeHtml(a.title)}</h2>
-              ${a.pinned ? '<span class="status-text status-warning">Pinned</span>' : ''}
-            </div>
-            <p style="color:var(--text-secondary);white-space:pre-line;">${escapeHtml(a.body)}</p>
-            <div class="meta-line">
-              <span>${escapeHtml(a.authorName || 'Administration')}</span>
-              <span aria-hidden="true">·</span>
-              <span style="text-transform:capitalize;">Audience: ${escapeHtml(a.audience || 'all')}</span>
-              <span aria-hidden="true">·</span>
-              <span class="mono">${escapeHtml(formatDateTime(a.createdAt))}</span>
-            </div>
-          </article>
-        `
-          )
-          .join('')}
-      </div>
-    `;
-  } catch (err) {
-    container.querySelector('#ann-feed-slot').innerHTML = `<div class="notice notice-danger">${escapeHtml(err.message)}</div>`;
-  }
-}
-
-export async function renderScheduleAndHolidaysView(container, filterRole = 'all') {
-  const { profile, roleData } = getState();
-  let page = 1;
-  let dayFilter = 'All';
-
-  container.innerHTML = `
-    <div class="stack-lg">
-      <div class="page-header">
-        <div>
-          <h1 class="page-title">Timetable &amp; Academic Holidays</h1>
-          <p class="page-subtitle">Weekly class schedule and scheduled institutional breaks.</p>
-        </div>
-      </div>
-
-      <section class="panel stack-md">
-        <div class="panel-header">
-          <h2 class="panel-title">Weekly Class Timetable</h2>
-          <div class="segmented-bar" id="tt-day-filter">
-            ${['All', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
-              .map((d) => `<button type="button" class="segmented-btn ${d === 'All' ? 'active' : ''}" data-day="${d}">${d}</button>`)
-              .join('')}
-          </div>
-        </div>
-        <div id="tt-table-slot">${renderTableSkeleton(5, 4)}</div>
-      </section>
-
-      <section class="panel stack-md">
-        <div class="panel-header">
-          <h2 class="panel-title">Academic Holidays</h2>
-        </div>
-        <div id="hol-table-slot">${renderTableSkeleton(4, 3)}</div>
-      </section>
-    </div>
-  `;
-
-  const [slots, subjects, classes, teachers, holidays] = await Promise.all([
-    fetchCollection('timetable'),
-    fetchCollection('subjects'),
-    fetchCollection('classes'),
-    fetchCollection('teachers'),
-    fetchCollection('holidays'),
-  ]);
-
-  const subjectMap = new Map(subjects.map((s) => [s.id, s]));
-  const classMap = new Map(classes.map((c) => [c.id, c]));
-  const teacherMap = new Map(teachers.map((t) => [t.uid || t.id, t]));
-
-  function renderTimetable() {
-    let relevant = slots;
-    if (filterRole === 'student' && roleData?.classId) {
-      relevant = relevant.filter((s) => s.classId === roleData.classId);
-    } else if (filterRole === 'teacher') {
-      relevant = relevant.filter((s) => s.teacherId === profile.uid);
-    }
-    if (dayFilter !== 'All') {
-      relevant = relevant.filter((s) => s.dayOfWeek === dayFilter);
-    }
-    const paged = paginateItems(relevant, page, 10);
-    const slotEl = container.querySelector('#tt-table-slot');
-    if (paged.totalItems === 0) {
-      slotEl.innerHTML = renderEmptyState({
-        title: 'No timetable entries found',
-        description: 'Scheduled lectures for your filter will appear once configured by Administration.',
-      });
-      return;
-    }
-
-    slotEl.innerHTML = `
-      <div class="table-wrap">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Day</th>
-              <th>Time</th>
-              <th>Subject</th>
-              <th>Class</th>
-              <th>Instructor</th>
-              <th>Room</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${paged.items
-              .map((item) => {
-                const sub = subjectMap.get(item.subjectId);
-                const cls = classMap.get(item.classId);
-                const tch = teacherMap.get(item.teacherId);
-                return `
-                  <tr>
-                    <td><strong>${escapeHtml(item.dayOfWeek)}</strong></td>
-                    <td class="mono">${escapeHtml(item.startTime)} – ${escapeHtml(item.endTime)}</td>
-                    <td>${escapeHtml(sub ? `${sub.code} · ${sub.name}` : item.subjectId)}</td>
-                    <td>${escapeHtml(cls ? cls.name : item.classId)}</td>
-                    <td>${escapeHtml(tch ? tch.name : 'Assigned Faculty')}</td>
-                    <td class="mono">${escapeHtml(item.room || '—')}</td>
-                  </tr>
-                `;
-              })
-              .join('')}
-          </tbody>
-        </table>
-      </div>
-    `;
-  }
-
-  function renderHolidays() {
-    const slotEl = container.querySelector('#hol-table-slot');
-    const sorted = [...holidays].sort((a, b) => String(a.date).localeCompare(String(b.date)));
-    if (sorted.length === 0) {
-      slotEl.innerHTML = renderEmptyState({
-        title: 'No holidays listed',
-        description: 'Public and academic holidays will display here.',
-      });
-      return;
-    }
-    slotEl.innerHTML = `
-      <div class="table-wrap">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>Holiday</th>
-              <th>Type</th>
-              <th>Description</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${sorted
-              .map(
-                (h) => `
-              <tr>
-                <td class="mono">${escapeHtml(h.date)}</td>
-                <td><strong>${escapeHtml(h.title)}</strong></td>
-                <td style="text-transform:capitalize;">${escapeHtml(h.type || 'academic')}</td>
-                <td style="color:var(--text-secondary);">${escapeHtml(h.description || '—')}</td>
-              </tr>
-            `
-              )
-              .join('')}
-          </tbody>
-        </table>
-      </div>
-    `;
-  }
-
-  container.querySelectorAll('#tt-day-filter [data-day]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      dayFilter = btn.getAttribute('data-day');
-      page = 1;
-      container.querySelectorAll('#tt-day-filter [data-day]').forEach((b) => b.classList.toggle('active', b === btn));
-      renderTimetable();
-    });
-  });
-
-  renderTimetable();
-  renderHolidays();
 }

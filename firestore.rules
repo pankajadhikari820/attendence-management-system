@@ -2,22 +2,9 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Global Safety Net (Default Deny)
+    // Global Safety Net: Default Deny
     match /{document=**} {
       allow read, write: if false;
-    }
-
-    // Core Identity & Validation Primitives
-    function isValidId(id) {
-      return id is string && id.size() >= 1 && id.size() <= 160 && id.matches('^[a-zA-Z0-9_\\-]+$');
-    }
-
-    function incoming() {
-      return request.resource.data;
-    }
-
-    function existing() {
-      return resource.data;
     }
 
     function isSignedIn() {
@@ -28,297 +15,370 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.email_verified == true;
     }
 
-    function userExists(uid) {
-      return exists(/databases/$(database)/documents/users/$(uid));
+    function incoming() {
+      return request.resource.data;
     }
 
-    function userData(uid) {
-      return get(/databases/$(database)/documents/users/$(uid)).data;
+    function existing() {
+      return resource.data;
     }
 
-    function isBootstrappedAdmin() {
-      return isVerified() && request.auth.token.email == 'pankajadhikari820@gmail.com';
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 160 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
-    function isAdmin() {
-      return isVerified() && (
-        isBootstrappedAdmin() ||
-        (userExists(request.auth.uid) && userData(request.auth.uid).role == 'admin' && userData(request.auth.uid).status == 'active')
+    function membershipExists(orgId, uid) {
+      return exists(/databases/$(database)/documents/users/$(uid)/memberships/$(orgId));
+    }
+
+    function membershipData(orgId, uid) {
+      return get(/databases/$(database)/documents/users/$(uid)/memberships/$(orgId)).data;
+    }
+
+    function isVerifiedMemberOfOrg(orgId) {
+      return isVerified()
+        && membershipExists(orgId, request.auth.uid)
+        && membershipData(orgId, request.auth.uid).status == 'active';
+    }
+
+    function isOrgOwner(orgId) {
+      return isVerifiedMemberOfOrg(orgId) && (
+        membershipData(orgId, request.auth.uid).isOwner == true ||
+        membershipData(orgId, request.auth.uid).portalTier == 'owner' ||
+        (exists(/databases/$(database)/documents/organizations/$(orgId)) &&
+         get(/databases/$(database)/documents/organizations/$(orgId)).data.ownerUid == request.auth.uid)
       );
     }
 
-    function isTeacher() {
-      return isVerified() && userExists(request.auth.uid) && userData(request.auth.uid).role == 'teacher' && userData(request.auth.uid).status == 'active';
+    function hasOrgPerm(orgId, permKey) {
+      return isOrgOwner(orgId) || (
+        isVerifiedMemberOfOrg(orgId) &&
+        membershipData(orgId, request.auth.uid).permissions[permKey] == true
+      );
     }
 
-    function isStudent() {
-      return isVerified() && userExists(request.auth.uid) && userData(request.auth.uid).role == 'student' && userData(request.auth.uid).status == 'active';
+    // Public Contact Inquiries (write-only lead form; no public reads)
+    match /contactInquiries/{inqId} {
+      allow create: if incoming().name is string && incoming().name.size() >= 1 && incoming().name.size() <= 100
+        && incoming().email is string && incoming().email.size() >= 3 && incoming().email.size() <= 160
+        && incoming().message is string && incoming().message.size() >= 1 && incoming().message.size() <= 2000;
+      allow read, update, delete: if false;
     }
 
-    // Users Collection (PII protected; self-promotion blocked)
+    // Invitation Code Lookup Index (get by exact code only, never listable)
+    match /invitationIndex/{inviteCode} {
+      allow get: if isSignedIn() && isValidId(inviteCode);
+      allow list: if false;
+      allow create: if isVerified() && isValidId(inviteCode)
+        && incoming().orgId is string
+        && (isOrgOwner(incoming().orgId) || hasOrgPerm(incoming().orgId, 'canManageMembers'));
+      allow update: if isSignedIn() && isValidId(inviteCode)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+        && incoming().status in ['accepted', 'revoked'];
+      allow delete: if false;
+    }
+
+    // Global Users Root
     match /users/{userId} {
-      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin() || isTeacher());
-      allow list: if isAdmin();
+      allow get: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+      allow list: if false;
 
       allow create: if isSignedIn() && isValidId(userId)
+        && request.auth.uid == userId
         && incoming().uid == userId
-        && incoming().name is string && incoming().name.size() >= 1 && incoming().name.size() <= 100
-        && incoming().email is string && incoming().email.size() <= 160
-        && incoming().role in ['admin', 'teacher', 'student']
-        && incoming().status in ['active', 'inactive']
-        && (
-          isAdmin() ||
-          (request.auth.uid == userId && (
-            incoming().role == 'student' ||
-            (isBootstrappedAdmin() && incoming().role == 'admin')
-          ))
+        && incoming().email is string && incoming().email.size() <= 160;
+
+      allow update: if isSignedIn() && isValidId(userId) && (
+        request.auth.uid == userId
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'avatarUrl', 'emailVerified', 'fcmToken', 'lastActiveOrgId', 'updatedAt'])
+      );
+      allow delete: if false;
+
+      // Trusted Organization Memberships (Prevents self-escalation)
+      match /memberships/{orgId} {
+        allow get, list: if isSignedIn() && (
+          request.auth.uid == userId ||
+          isOrgOwner(orgId) ||
+          hasOrgPerm(orgId, 'canManageMembers')
         );
 
-      allow update: if isVerified() && isValidId(userId) && (
-        isAdmin() ||
-        (request.auth.uid == userId
-          && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'avatarUrl', 'emailVerified', 'fcmToken', 'updatedAt'])
-          && incoming().role == existing().role
-          && incoming().status == existing().status
-          && incoming().uid == existing().uid)
-      );
-
-      allow delete: if isAdmin();
-    }
-
-    // Students Collection
-    match /students/{studentId} {
-      allow get: if isVerified() && isValidId(studentId) && (request.auth.uid == studentId || isAdmin() || isTeacher());
-      allow list: if isVerified() && (isAdmin() || isTeacher());
-
-      allow create: if isSignedIn() && isValidId(studentId)
-        && incoming().uid == studentId
-        && incoming().name is string && incoming().name.size() <= 100
-        && incoming().rollNumber is string && incoming().rollNumber.size() <= 40
-        && incoming().email is string && incoming().email.size() <= 160
-        && (isAdmin() || (request.auth.uid == studentId && incoming().status == 'active'));
-
-      allow update: if isVerified() && isValidId(studentId) && (
-        isAdmin() ||
-        (request.auth.uid == studentId && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'updatedAt']))
-      );
-
-      allow delete: if isAdmin();
-    }
-
-    // Teachers Collection
-    match /teachers/{teacherId} {
-      allow get: if isVerified() && isValidId(teacherId);
-      allow list: if isVerified();
-
-      allow create: if isAdmin() && isValidId(teacherId)
-        && incoming().uid == teacherId
-        && incoming().name is string && incoming().name.size() <= 100
-        && incoming().employeeId is string && incoming().employeeId.size() <= 40;
-
-      allow update: if isVerified() && isValidId(teacherId) && (
-        isAdmin() ||
-        (request.auth.uid == teacherId && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'updatedAt']))
-      );
-
-      allow delete: if isAdmin();
-    }
-
-    // Academic Reference Catalogs (Read by verified users, managed by Admin)
-    match /departments/{deptId} {
-      allow read: if isVerified();
-      allow create, update: if isAdmin() && isValidId(deptId)
-        && incoming().code is string && incoming().code.size() <= 20
-        && incoming().name is string && incoming().name.size() <= 120;
-      allow delete: if isAdmin();
-    }
-
-    match /courses/{courseId} {
-      allow read: if isVerified();
-      allow create, update: if isAdmin() && isValidId(courseId)
-        && incoming().code is string && incoming().code.size() <= 24
-        && incoming().name is string && incoming().name.size() <= 120;
-      allow delete: if isAdmin();
-    }
-
-    match /subjects/{subjectId} {
-      allow read: if isVerified();
-      allow create, update: if isAdmin() && isValidId(subjectId)
-        && incoming().code is string && incoming().code.size() <= 24
-        && incoming().name is string && incoming().name.size() <= 120;
-      allow delete: if isAdmin();
-    }
-
-    match /classes/{classId} {
-      allow read: if isVerified();
-      allow create, update: if isAdmin() && isValidId(classId)
-        && incoming().code is string && incoming().code.size() <= 24
-        && incoming().name is string && incoming().name.size() <= 120;
-      allow delete: if isAdmin();
-    }
-
-    match /timetable/{slotId} {
-      allow read: if isVerified();
-      allow create, update: if isAdmin() && isValidId(slotId)
-        && incoming().classId is string && incoming().subjectId is string;
-      allow delete: if isAdmin();
-    }
-
-    match /holidays/{holidayId} {
-      allow read: if isVerified();
-      allow create, update: if isAdmin() && isValidId(holidayId)
-        && incoming().title is string && incoming().title.size() <= 140
-        && incoming().date is string && incoming().date.size() <= 20;
-      allow delete: if isAdmin();
-    }
-
-    match /settings/{settingId} {
-      allow read: if isSignedIn();
-      allow create, update, delete: if isAdmin();
-    }
-
-    // Attendance Sessions
-    match /attendanceSessions/{sessionId} {
-      allow get: if isVerified() && isValidId(sessionId);
-      allow list: if isVerified() && (isAdmin() || isTeacher());
-
-      allow create: if (isTeacher() || isAdmin()) && isValidId(sessionId)
-        && incoming().teacherId is string && incoming().teacherId.size() <= 128
-        && (isAdmin() || incoming().teacherId == request.auth.uid)
-        && incoming().classId is string && incoming().classId.size() <= 128
-        && incoming().subjectId is string && incoming().subjectId.size() <= 128
-        && incoming().mode in ['qr', 'manual']
-        && incoming().status in ['active', 'closed'];
-
-      allow update: if isVerified() && isValidId(sessionId) && (
-        isAdmin() ||
-        (isTeacher() && existing().teacherId == request.auth.uid) ||
-        // Student QR scan may only increment presentCount by +1 while session is active
-        (isStudent()
-          && existing().status == 'active'
-          && incoming().diff(existing()).affectedKeys().hasOnly(['presentCount', 'updatedAt'])
-          && incoming().presentCount == existing().presentCount + 1)
-      );
-
-      allow delete: if isAdmin();
-    }
-
-    // Attendance Records (Deterministic ID: {sessionId}_{studentUid} prevents duplicates)
-    match /attendanceRecords/{recordId} {
-      allow get: if isVerified() && (
-        isAdmin() ||
-        isTeacher() ||
-        existing().studentUid == request.auth.uid
-      );
-      allow list: if isVerified() && (
-        isAdmin() ||
-        (isTeacher() && resource.data.teacherId == request.auth.uid) ||
-        resource.data.studentUid == request.auth.uid
-      );
-
-      allow create: if isVerified()
-        && recordId == incoming().sessionId + '_' + incoming().studentUid
-        && incoming().sessionId is string && incoming().sessionId.size() <= 128
-        && incoming().studentUid is string && incoming().studentUid.size() <= 128
-        && incoming().status in ['present', 'absent', 'late', 'excused']
-        && incoming().method in ['qr', 'manual', 'correction', 'auto_close']
-        && (
-          isAdmin() ||
-          (isTeacher() && incoming().teacherId == request.auth.uid) ||
-          (isStudent()
-            && incoming().studentUid == request.auth.uid
-            && incoming().method == 'qr'
-            && incoming().status == 'present'
-            && exists(/databases/$(database)/documents/attendanceSessions/$(incoming().sessionId))
-            && get(/databases/$(database)/documents/attendanceSessions/$(incoming().sessionId)).data.status == 'active')
+        allow create: if isSignedIn() && isValidId(orgId) && incoming().orgId == orgId && incoming().uid == userId && (
+          // Org Owner creating initial org or elevated admin provisioning member
+          (exists(/databases/$(database)/documents/organizations/$(orgId)) &&
+           get(/databases/$(database)/documents/organizations/$(orgId)).data.ownerUid == request.auth.uid) ||
+          isOrgOwner(orgId) ||
+          hasOrgPerm(orgId, 'canManageMembers') ||
+          // Member self-onboarding strictly locked to base 'member' tier with zero elevated permissions
+          (request.auth.uid == userId
+            && incoming().isOwner == false
+            && incoming().portalTier == 'member'
+            && incoming().status in ['pending', 'active']
+            && incoming().permissions.canManageOrg == false
+            && incoming().permissions.canManageMembers == false
+            && incoming().permissions.canTakeAttendance == false)
         );
 
-      allow update: if isVerified() && (
-        isAdmin() ||
-        (isTeacher() && existing().teacherId == request.auth.uid
-          && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'method', 'markedBy', 'updatedAt'])
-          && incoming().status in ['present', 'absent', 'late', 'excused'])
+        allow update: if isVerified() && isValidId(orgId) && (
+          isOrgOwner(orgId) ||
+          hasOrgPerm(orgId, 'canManageMembers')
+        );
+
+        allow delete: if isVerified() && isOrgOwner(orgId);
+      }
+    }
+
+    // Multi-Tenant Organization Root
+    match /organizations/{orgId} {
+      // Exact Org ID get allowed for signed-in users joining via ORG-XXXXX; list blocked to prevent scraping
+      allow get: if isSignedIn() && isValidId(orgId);
+      allow list: if false;
+
+      allow create: if isSignedIn() && isValidId(orgId)
+        && incoming().orgId == orgId
+        && incoming().ownerUid == request.auth.uid
+        && incoming().name is string && incoming().name.size() >= 2 && incoming().name.size() <= 140
+        && incoming().plan == 'free';
+
+      allow update: if isVerified() && isValidId(orgId) && (
+        isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageOrg')
       );
+      allow delete: if false;
 
-      allow delete: if isAdmin();
-    }
+      // Branches
+      match /branches/{branchId} {
+        allow read: if isVerifiedMemberOfOrg(orgId);
+        allow create, update: if isVerifiedMemberOfOrg(orgId) && (
+          isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageBranches')
+        );
+        allow delete: if isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageBranches');
+      }
 
-    // Leave Requests
-    match /leaveRequests/{leaveId} {
-      allow get: if isVerified() && (isAdmin() || isTeacher() || existing().studentUid == request.auth.uid);
-      allow list: if isVerified() && (isAdmin() || isTeacher() || resource.data.studentUid == request.auth.uid);
+      // Departments
+      match /departments/{deptId} {
+        allow read: if isVerifiedMemberOfOrg(orgId);
+        allow create, update: if isVerifiedMemberOfOrg(orgId) && (
+          isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageDepartments')
+        );
+        allow delete: if isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageDepartments');
+      }
 
-      allow create: if isVerified() && isValidId(leaveId)
-        && incoming().studentUid == request.auth.uid
-        && incoming().status == 'pending'
-        && incoming().reason is string && incoming().reason.size() >= 1 && incoming().reason.size() <= 600;
+      // Designations & Permissions
+      match /designations/{desId} {
+        allow read: if isVerifiedMemberOfOrg(orgId);
+        allow create, update: if isVerifiedMemberOfOrg(orgId) && (
+          isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageHierarchy')
+        );
+        allow delete: if isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageHierarchy');
+      }
 
-      allow update: if isVerified() && isValidId(leaveId) && (
-        isAdmin() ||
-        (isTeacher()
-          && existing().status == 'pending'
-          && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewNote', 'updatedAt'])
-          && incoming().status in ['approved', 'rejected'])
-      );
+      // Shifts
+      match /shifts/{shiftId} {
+        allow read: if isVerifiedMemberOfOrg(orgId);
+        allow create, update: if isVerifiedMemberOfOrg(orgId) && (
+          isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageShifts')
+        );
+        allow delete: if isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageShifts');
+      }
 
-      allow delete: if isAdmin();
-    }
+      // Holidays
+      match /holidays/{holidayId} {
+        allow read: if isVerifiedMemberOfOrg(orgId);
+        allow create, update: if isVerifiedMemberOfOrg(orgId) && (
+          isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageHolidays')
+        );
+        allow delete: if isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageHolidays');
+      }
 
-    // Correction Requests
-    match /correctionRequests/{correctionId} {
-      allow get: if isVerified() && (isAdmin() || isTeacher() || existing().studentUid == request.auth.uid);
-      allow list: if isVerified() && (isAdmin() || isTeacher() || resource.data.studentUid == request.auth.uid);
+      // Organization Members
+      match /members/{memberUid} {
+        allow get: if isVerifiedMemberOfOrg(orgId) && (
+          request.auth.uid == memberUid ||
+          isOrgOwner(orgId) ||
+          hasOrgPerm(orgId, 'canManageMembers') ||
+          hasOrgPerm(orgId, 'canTakeAttendance') ||
+          hasOrgPerm(orgId, 'canViewReports') ||
+          hasOrgPerm(orgId, 'canApproveLeaves') ||
+          hasOrgPerm(orgId, 'canApproveCorrections')
+        );
+        allow list: if isVerifiedMemberOfOrg(orgId) && (
+          isOrgOwner(orgId) ||
+          hasOrgPerm(orgId, 'canManageMembers') ||
+          hasOrgPerm(orgId, 'canTakeAttendance') ||
+          hasOrgPerm(orgId, 'canViewReports') ||
+          hasOrgPerm(orgId, 'canApproveLeaves') ||
+          hasOrgPerm(orgId, 'canApproveCorrections')
+        );
 
-      allow create: if isVerified() && isValidId(correctionId)
-        && incoming().studentUid == request.auth.uid
-        && incoming().status == 'pending'
-        && incoming().requestedStatus in ['present', 'excused']
-        && incoming().reason is string && incoming().reason.size() >= 1 && incoming().reason.size() <= 600;
+        allow create: if isSignedIn() && incoming().orgId == orgId && incoming().uid == memberUid && (
+          (exists(/databases/$(database)/documents/organizations/$(orgId)) &&
+           get(/databases/$(database)/documents/organizations/$(orgId)).data.ownerUid == request.auth.uid) ||
+          isOrgOwner(orgId) ||
+          hasOrgPerm(orgId, 'canManageMembers') ||
+          (request.auth.uid == memberUid
+            && incoming().isOwner == false
+            && incoming().portalTier == 'member'
+            && incoming().status in ['pending', 'active'])
+        );
 
-      allow update: if isVerified() && isValidId(correctionId) && (
-        isAdmin() ||
-        (isTeacher()
-          && existing().status == 'pending'
-          && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewNote', 'updatedAt'])
-          && incoming().status in ['approved', 'rejected'])
-      );
+        allow update: if isVerifiedMemberOfOrg(orgId) && (
+          isOrgOwner(orgId) ||
+          hasOrgPerm(orgId, 'canManageMembers') ||
+          (request.auth.uid == memberUid
+            && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phone', 'qrTokenId', 'updatedAt'])
+            && incoming().isOwner == existing().isOwner
+            && incoming().portalTier == existing().portalTier
+            && incoming().designationId == existing().designationId
+            && incoming().status == existing().status)
+        );
+        allow delete: if isOrgOwner(orgId);
+      }
 
-      allow delete: if isAdmin();
-    }
+      // Opaque Revocable Member QR Tokens
+      match /qrTokens/{tokenId} {
+        allow get: if isVerifiedMemberOfOrg(orgId);
+        allow list: if isOrgOwner(orgId) || hasOrgPerm(orgId, 'canTakeAttendance') || hasOrgPerm(orgId, 'canManageMembers');
+        allow create: if isSignedIn() && incoming().orgId == orgId && (
+          (exists(/databases/$(database)/documents/organizations/$(orgId)) &&
+           get(/databases/$(database)/documents/organizations/$(orgId)).data.ownerUid == request.auth.uid) ||
+          isOrgOwner(orgId) ||
+          hasOrgPerm(orgId, 'canManageMembers') ||
+          incoming().memberUid == request.auth.uid
+        );
+        allow update: if isVerifiedMemberOfOrg(orgId) && (
+          isOrgOwner(orgId) ||
+          hasOrgPerm(orgId, 'canManageMembers') ||
+          existing().memberUid == request.auth.uid
+        );
+        allow delete: if isOrgOwner(orgId);
+      }
 
-    // Notifications (User-isolated)
-    match /notifications/{notificationId} {
-      allow get: if isVerified() && (isAdmin() || existing().userId == request.auth.uid);
-      allow list: if isVerified() && (isAdmin() || resource.data.userId == request.auth.uid);
+      // Invitations
+      match /invitations/{inviteCode} {
+        allow read: if isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageMembers');
+        allow create: if isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageMembers');
+        allow update: if isSignedIn() && (
+          isOrgOwner(orgId) ||
+          hasOrgPerm(orgId, 'canManageMembers') ||
+          (incoming().diff(existing()).affectedKeys().hasOnly(['status', 'acceptedByUid', 'updatedAt'])
+            && incoming().acceptedByUid == request.auth.uid
+            && incoming().status == 'accepted')
+        );
+        allow delete: if isOrgOwner(orgId);
+      }
 
-      allow create: if isVerified()
-        && incoming().userId is string && incoming().userId.size() <= 128
-        && incoming().title is string && incoming().title.size() <= 160
-        && incoming().message is string && incoming().message.size() <= 600
-        && (isAdmin() || isTeacher() || incoming().userId == request.auth.uid);
+      // Attendance Sessions
+      match /attendanceSessions/{sessionId} {
+        allow read: if isVerifiedMemberOfOrg(orgId);
+        allow create, update: if isVerifiedMemberOfOrg(orgId) && (
+          isOrgOwner(orgId) || hasOrgPerm(orgId, 'canTakeAttendance')
+        );
+        allow delete: if isOrgOwner(orgId);
+      }
 
-      allow update: if isVerified()
-        && existing().userId == request.auth.uid
-        && incoming().diff(existing()).affectedKeys().hasOnly(['read', 'updatedAt'])
-        && incoming().read is bool;
+      // Attendance Records (Deterministic ID prevents duplicates; base members cannot tamper)
+      match /attendanceRecords/{recordId} {
+        allow get, list: if isVerifiedMemberOfOrg(orgId) && (
+          isOrgOwner(orgId) ||
+          hasOrgPerm(orgId, 'canTakeAttendance') ||
+          hasOrgPerm(orgId, 'canViewReports') ||
+          resource.data.memberUid == request.auth.uid
+        );
 
-      allow delete: if isAdmin() || (isVerified() && existing().userId == request.auth.uid);
-    }
+        allow create: if isVerifiedMemberOfOrg(orgId)
+          && incoming().orgId == orgId
+          && incoming().status in ['present', 'absent', 'late', 'half_day', 'on_leave', 'holiday', 'weekly_off']
+          && (
+            isOrgOwner(orgId) ||
+            hasOrgPerm(orgId, 'canTakeAttendance') ||
+            hasOrgPerm(orgId, 'canEditAttendance') ||
+            (incoming().memberUid == request.auth.uid
+              && get(/databases/$(database)/documents/organizations/$(orgId)).data.policies.allowSelfCheckIn == true)
+          );
 
-    // Announcements
-    match /announcements/{announcementId} {
-      allow read: if isVerified();
-      allow create, update, delete: if isAdmin();
-    }
+        allow update: if isVerifiedMemberOfOrg(orgId) && (
+          isOrgOwner(orgId) ||
+          hasOrgPerm(orgId, 'canTakeAttendance') ||
+          hasOrgPerm(orgId, 'canEditAttendance') ||
+          hasOrgPerm(orgId, 'canApproveLeaves') ||
+          hasOrgPerm(orgId, 'canApproveCorrections')
+        );
 
-    // Audit Logs (Append-only for verified users; readable only by Admin)
-    match /auditLogs/{logId} {
-      allow read: if isAdmin();
-      allow create: if isVerified()
-        && incoming().actorUid == request.auth.uid
-        && incoming().action is string && incoming().action.size() <= 80
-        && incoming().entityType is string && incoming().entityType.size() <= 60;
-      allow update, delete: if false;
+        allow delete: if isOrgOwner(orgId);
+      }
+
+      // Leave Requests
+      match /leaveRequests/{leaveId} {
+        allow get, list: if isVerifiedMemberOfOrg(orgId) && (
+          isOrgOwner(orgId) ||
+          hasOrgPerm(orgId, 'canApproveLeaves') ||
+          hasOrgPerm(orgId, 'canViewReports') ||
+          resource.data.memberUid == request.auth.uid
+        );
+        allow create: if isVerifiedMemberOfOrg(orgId)
+          && incoming().orgId == orgId
+          && incoming().memberUid == request.auth.uid
+          && incoming().status == 'pending'
+          && incoming().reason is string && incoming().reason.size() >= 1 && incoming().reason.size() <= 600;
+        allow update: if isVerifiedMemberOfOrg(orgId) && (
+          isOrgOwner(orgId) || hasOrgPerm(orgId, 'canApproveLeaves')
+        );
+        allow delete: if isOrgOwner(orgId);
+      }
+
+      // Correction Requests
+      match /correctionRequests/{corrId} {
+        allow get, list: if isVerifiedMemberOfOrg(orgId) && (
+          isOrgOwner(orgId) ||
+          hasOrgPerm(orgId, 'canApproveCorrections') ||
+          resource.data.memberUid == request.auth.uid
+        );
+        allow create: if isVerifiedMemberOfOrg(orgId)
+          && incoming().orgId == orgId
+          && incoming().memberUid == request.auth.uid
+          && incoming().status == 'pending'
+          && incoming().requestedStatus in ['present', 'late', 'half_day', 'on_leave']
+          && incoming().reason is string && incoming().reason.size() >= 1 && incoming().reason.size() <= 600;
+        allow update: if isVerifiedMemberOfOrg(orgId) && (
+          isOrgOwner(orgId) || hasOrgPerm(orgId, 'canApproveCorrections')
+        );
+        allow delete: if isOrgOwner(orgId);
+      }
+
+      // Notifications (User-isolated inside Org)
+      match /notifications/{notifId} {
+        allow get, list: if isVerifiedMemberOfOrg(orgId) && (
+          isOrgOwner(orgId) || resource.data.userId == request.auth.uid
+        );
+        allow create: if isVerifiedMemberOfOrg(orgId) && incoming().orgId == orgId && (
+          isOrgOwner(orgId) ||
+          hasOrgPerm(orgId, 'canTakeAttendance') ||
+          hasOrgPerm(orgId, 'canManageMembers') ||
+          hasOrgPerm(orgId, 'canApproveLeaves') ||
+          hasOrgPerm(orgId, 'canApproveCorrections') ||
+          incoming().userId == request.auth.uid
+        );
+        allow update: if isVerifiedMemberOfOrg(orgId)
+          && existing().userId == request.auth.uid
+          && incoming().diff(existing()).affectedKeys().hasOnly(['read', 'updatedAt']);
+        allow delete: if isOrgOwner(orgId) || (isVerifiedMemberOfOrg(orgId) && existing().userId == request.auth.uid);
+      }
+
+      // Anomalies
+      match /anomalies/{anomalyId} {
+        allow read: if isOrgOwner(orgId) || hasOrgPerm(orgId, 'canViewAuditLogs') || hasOrgPerm(orgId, 'canViewReports');
+        allow create: if isVerifiedMemberOfOrg(orgId) && incoming().orgId == orgId;
+        allow update: if isOrgOwner(orgId) || hasOrgPerm(orgId, 'canViewAuditLogs');
+        allow delete: if false;
+      }
+
+      // Immutable Audit Logs
+      match /auditLogs/{logId} {
+        allow read: if isOrgOwner(orgId) || hasOrgPerm(orgId, 'canViewAuditLogs');
+        allow create: if isVerifiedMemberOfOrg(orgId)
+          && incoming().orgId == orgId
+          && incoming().actorUid == request.auth.uid;
+        allow update, delete: if false;
+      }
     }
   }
 }

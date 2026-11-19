@@ -1,9 +1,17 @@
 import { initializeApp, getApps } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
+import {
+  initializeFirestore,
+  getFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  doc,
+  getDocFromServer,
+} from 'firebase/firestore';
 import { getDatabase } from 'firebase/database';
 import { getStorage } from 'firebase/storage';
 import { getFunctions } from 'firebase/functions';
+import { initializeAppCheck, ReCaptchaV3Provider } from 'firebase/app-check';
 
 // Firebase Configuration supplied by project owner (attendence-system-867c1)
 export const firebaseConfig = {
@@ -19,13 +27,64 @@ export const firebaseConfig = {
 
 export const app = getApps().find((a) => a.name === '[DEFAULT]') || initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app);
+
+let firestoreInstance;
+try {
+  firestoreInstance = initializeFirestore(app, {
+    localCache: persistentLocalCache({
+      tabManager: persistentMultipleTabManager(),
+    }),
+  });
+} catch {
+  firestoreInstance = getFirestore(app);
+}
+export const db = firestoreInstance;
 export const rtdb = getDatabase(app);
 export const storage = getStorage(app);
 export const functions = getFunctions(app, 'us-central1');
 
-// Secondary Firebase app instance used strictly when Admin creates accounts on Spark plan
-// (when Cloud Functions are not deployed), preventing Admin session sign-out.
+let appCheckInstance = null;
+let appCheckStatus = {
+  enabled: false,
+  reason: 'App Check ReCaptcha v3 site key not configured.',
+};
+
+export function initFirebaseAppCheck() {
+  if (appCheckInstance) return appCheckStatus;
+  let siteKey = import.meta.env?.VITE_FIREBASE_APPCHECK_SITE_KEY || '';
+  if (!siteKey) {
+    try {
+      siteKey = localStorage.getItem('smartattend_appcheck_site_key') || '';
+    } catch {
+      siteKey = '';
+    }
+  }
+  if (!siteKey.trim()) {
+    appCheckStatus = {
+      enabled: false,
+      reason: 'Configure VITE_FIREBASE_APPCHECK_SITE_KEY (or set it in Security Settings) after enabling App Check in Firebase Console.',
+    };
+    return appCheckStatus;
+  }
+
+  try {
+    appCheckInstance = initializeAppCheck(app, {
+      provider: new ReCaptchaV3Provider(siteKey.trim()),
+      isTokenAutoRefreshEnabled: true,
+    });
+    appCheckStatus = { enabled: true, reason: 'Firebase App Check (ReCaptcha v3) active.' };
+  } catch (err) {
+    appCheckStatus = { enabled: false, reason: err?.message || 'App Check initialization failed.' };
+  }
+  return appCheckStatus;
+}
+
+export function getAppCheckStatus() {
+  return appCheckStatus;
+}
+
+// Secondary Firebase app instance used strictly when Org Admin provisions member accounts on Spark plan
+// (when Cloud Functions are not deployed), keeping the Owner/Admin signed in.
 export function getSecondaryAuth() {
   const existing = getApps().find((a) => a.name === 'adminProvisioner');
   const secondaryApp = existing || initializeApp(firebaseConfig, 'adminProvisioner');
@@ -38,10 +97,8 @@ export async function testFirestoreConnection() {
     return { ok: true };
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error('Firestore appears offline. Please verify Firebase project configuration.');
       return { ok: false, offline: true, message: error.message };
     }
-    // Permission denied on test/connection still confirms Firestore server reachability
     return { ok: true };
   }
 }

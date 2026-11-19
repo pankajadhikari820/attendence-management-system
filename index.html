@@ -3,18 +3,22 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SmartAttend — Smart Attendance Management System</title>
+    <meta name="theme-color" content="#1d4ed8" />
+    <title>SmartAttend — Universal Attendance Management SaaS</title>
     <meta
       name="description"
-      content="SmartAttend is a role-based Smart Attendance Management System featuring dynamic expiring QR attendance, shortage analytics, leave & correction workflows, and PDF/Excel reporting."
+      content="Universal multi-organization attendance management SaaS for schools, colleges, coaching institutes, offices, startups, and factories. Dynamic hierarchies, secure QR attendance, shifts, leaves, and reports."
     />
-    <meta property="og:title" content="SmartAttend — Smart Attendance Management System" />
+    <meta property="og:title" content="SmartAttend — Universal Attendance Management SaaS" />
     <meta
       property="og:description"
-      content="Production-ready academic attendance management with Admin, Teacher, and Student portals powered by Firebase."
+      content="Attendance management simplified for every organization with isolated workspaces, custom hierarchies, secure QR codes, and real-time Firebase sync."
     />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -25,6 +29,7 @@
     <link rel="stylesheet" href="/src/styles/base.css" />
     <link rel="stylesheet" href="/src/styles/layout.css" />
     <link rel="stylesheet" href="/src/styles/components.css" />
+    <link rel="stylesheet" href="/src/styles/landing.css" />
     <script>
       (function () {
         try {
@@ -39,12 +44,15 @@
   </head>
   <body>
     <a href="#main-content" class="skip-link">Skip to main content</a>
+    <div id="offline-banner" class="offline-banner" role="alert" style="display:none;">
+      <strong>You are offline.</strong> Viewing cached interface only — live attendance marking and organization changes require an active internet connection.
+    </div>
     <div id="app" class="app-shell">
       <div class="boot-screen">
         <div class="boot-card">
           <div class="boot-spinner" aria-hidden="true"></div>
           <p class="boot-title">SmartAttend</p>
-          <p class="boot-subtitle">Initializing workspace...</p>
+          <p class="boot-subtitle">Loading universal attendance platform...</p>
         </div>
       </div>
     </div>

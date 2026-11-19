@@ -21,12 +21,19 @@ service firebase.storage {
         && request.resource.contentType.matches('image/.*');
     }
 
-    match /leave-attachments/{uid}/{fileName} {
+    match /orgs/{orgId}/logos/{logoOwner}/{fileName} {
+      allow read: if isVerified();
+      allow write: if isVerified()
+        && request.resource.size <= 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    match /orgs/{orgId}/leave-attachments/{uid}/{fileName} {
       allow read: if isVerified();
       allow write: if isVerified() && request.auth.uid == uid && isAllowedAttachment();
     }
 
-    match /correction-evidence/{uid}/{fileName} {
+    match /orgs/{orgId}/correction-evidence/{uid}/{fileName} {
       allow read: if isVerified();
       allow write: if isVerified() && request.auth.uid == uid && isAllowedAttachment();
     }

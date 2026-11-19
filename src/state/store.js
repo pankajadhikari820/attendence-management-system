@@ -1,20 +1,23 @@
+import { DEFAULT_ATTENDANCE_POLICY } from '../utils/attendanceMath.js';
+
 const initialState = {
   authReady: false,
   firebaseUser: null,
-  profile: null,
-  roleData: null, // student or teacher doc
-  settings: {
-    currentAcademicSession: '2026-2027 Fall',
-    academicSessions: ['2026-2027 Fall', '2026-2027 Spring'],
-    defaultAttendanceThreshold: 75,
-    qrRotationSeconds: 15,
-    lateGraceMinutes: 10,
-    useCloudFunctions: false, // Toggleable in Admin Settings when Blaze Functions are deployed
-  },
+  userProfile: null,
+  memberships: [], // [{ orgId, orgName, orgType, portalTier, designationId, designationName, isOwner, status, permissions, memberPublicId }]
+  activeOrgId: '',
+  activeOrg: null, // organizations/{orgId}
+  activeMembership: null, // users/{uid}/memberships/{orgId}
+  activeMember: null, // organizations/{orgId}/members/{uid}
+  activeDesignation: null, // organizations/{orgId}/designations/{designationId}
+  resolvedTier: 'member', // 'owner' | 'manager' | 'member'
+  resolvedPermissions: null,
+  settings: { ...DEFAULT_ATTENDANCE_POLICY },
   activeView: 'overview',
   unreadNotifications: 0,
   notifications: [],
   sidebarOpen: false,
+  isOnline: true,
 };
 
 const state = { ...initialState };
@@ -33,6 +36,24 @@ export function setState(patch) {
       console.error('Store listener error:', err);
     }
   }
+}
+
+export function resetWorkspaceState() {
+  setState({
+    userProfile: null,
+    memberships: [],
+    activeOrgId: '',
+    activeOrg: null,
+    activeMembership: null,
+    activeMember: null,
+    activeDesignation: null,
+    resolvedTier: 'member',
+    resolvedPermissions: null,
+    unreadNotifications: 0,
+    notifications: [],
+    activeView: 'overview',
+    sidebarOpen: false,
+  });
 }
 
 export function subscribe(fn) {
