@@ -148,7 +148,7 @@ async function renderMemberOverview(container) {
       fetchOrgCollection(activeOrgId, 'holidays'),
       activeMember?.departmentId ? fetchOrgDoc(activeOrgId, 'departments', activeMember.departmentId) : null,
       activeMember?.branchId ? fetchOrgDoc(activeOrgId, 'branches', activeMember.branchId) : null,
-      activeMember?.parentMemberId ? fetchOrgDoc(activeOrgId, 'members', activeMember.parentMemberId) : null,
+      activeMember?.parentMemberId ? fetchOrgDoc(activeOrgId, 'members', activeMember.parentMemberId).catch(() => null) : null,
     ]);
 
     const summary = calculateAttendanceSummary(records, settings);

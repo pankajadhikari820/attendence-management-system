@@ -49,8 +49,9 @@ service cloud.firestore {
 
     function isOrgOwner(orgId) {
       return isVerifiedMemberOfOrg(orgId) && (
-        membershipData(orgId, request.auth.uid).isOwner == true ||
-        membershipData(orgId, request.auth.uid).portalTier == 'owner' ||
+        membershipData(orgId, request.auth.uid).get('isOwner', false) == true ||
+        membershipData(orgId, request.auth.uid).get('portalTier', 'member') == 'owner' ||
+        membershipData(orgId, request.auth.uid).get('permissions', {}).get('canManageOrg', false) == true ||
         (exists(/databases/$(database)/documents/organizations/$(orgId)) &&
          get(/databases/$(database)/documents/organizations/$(orgId)).data.ownerUid == request.auth.uid)
       );
@@ -59,7 +60,7 @@ service cloud.firestore {
     function hasOrgPerm(orgId, permKey) {
       return isOrgOwner(orgId) || (
         isVerifiedMemberOfOrg(orgId) &&
-        membershipData(orgId, request.auth.uid).permissions[permKey] == true
+        membershipData(orgId, request.auth.uid).get('permissions', {}).get(permKey, false) == true
       );
     }
 
@@ -90,9 +91,17 @@ service cloud.firestore {
       allow list: if false;
 
       allow create: if isSignedIn() && isValidId(userId)
-        && request.auth.uid == userId
         && incoming().uid == userId
-        && incoming().email is string && incoming().email.size() <= 160;
+        && incoming().email is string && incoming().email.size() <= 160
+        && (
+          request.auth.uid == userId ||
+          (incoming().get('lastActiveOrgId', '') is string
+            && isValidId(incoming().get('lastActiveOrgId', ''))
+            && (
+              isOrgOwner(incoming().lastActiveOrgId) ||
+              hasOrgPerm(incoming().lastActiveOrgId, 'canManageMembers')
+            ))
+        );
 
       allow update: if isSignedIn() && isValidId(userId) && (
         request.auth.uid == userId
@@ -102,11 +111,12 @@ service cloud.firestore {
 
       // Trusted Organization Memberships (Prevents self-escalation)
       match /memberships/{orgId} {
-        allow get, list: if isSignedIn() && (
+        allow get: if isSignedIn() && (
           request.auth.uid == userId ||
           isOrgOwner(orgId) ||
           hasOrgPerm(orgId, 'canManageMembers')
         );
+        allow list: if isSignedIn() && request.auth.uid == userId;
 
         allow create: if isSignedIn() && isValidId(orgId) && incoming().orgId == orgId && incoming().uid == userId && (
           // Org Creator creating their initial owner membership
@@ -221,15 +231,24 @@ service cloud.firestore {
           isOrgOwner(orgId) ||
           hasOrgPerm(orgId, 'canManageMembers') ||
           hasOrgPerm(orgId, 'canTakeAttendance') ||
+          hasOrgPerm(orgId, 'canEditAttendance') ||
           hasOrgPerm(orgId, 'canViewReports') ||
+          hasOrgPerm(orgId, 'canExportData') ||
           hasOrgPerm(orgId, 'canApproveLeaves') ||
-          hasOrgPerm(orgId, 'canApproveCorrections')
+          hasOrgPerm(orgId, 'canApproveCorrections') ||
+          (exists(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid)) &&
+           get(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid)).data.get('parentMemberId', '') == memberUid)
         );
         allow list: if isVerifiedMemberOfOrg(orgId) && (
           isOrgOwner(orgId) ||
           hasOrgPerm(orgId, 'canManageMembers') ||
           hasOrgPerm(orgId, 'canTakeAttendance') ||
+          hasOrgPerm(orgId, 'canEditAttendance') ||
           hasOrgPerm(orgId, 'canViewReports') ||
+          hasOrgPerm(orgId, 'canExportData') ||
+          hasOrgPerm(orgId, 'canManageHierarchy') ||
+          hasOrgPerm(orgId, 'canManageDepartments') ||
+          hasOrgPerm(orgId, 'canManageBranches') ||
           hasOrgPerm(orgId, 'canApproveLeaves') ||
           hasOrgPerm(orgId, 'canApproveCorrections')
         );
@@ -277,12 +296,14 @@ service cloud.firestore {
 
       // Invitations
       match /invitations/{inviteCode} {
-        allow read: if isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageMembers');
+        allow get: if isSignedIn() && isValidId(inviteCode);
+        allow list: if isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageMembers');
         allow create: if isOrgOwner(orgId) || hasOrgPerm(orgId, 'canManageMembers');
         allow update: if isSignedIn() && (
           isOrgOwner(orgId) ||
           hasOrgPerm(orgId, 'canManageMembers') ||
-          (incoming().diff(existing()).affectedKeys().hasOnly(['status', 'acceptedByUid', 'updatedAt'])
+          (existing().status == 'pending'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'acceptedByUid', 'updatedAt'])
             && incoming().acceptedByUid == request.auth.uid
             && incoming().status == 'accepted')
         );
@@ -303,7 +324,10 @@ service cloud.firestore {
         allow get, list: if isVerifiedMemberOfOrg(orgId) && (
           isOrgOwner(orgId) ||
           hasOrgPerm(orgId, 'canTakeAttendance') ||
+          hasOrgPerm(orgId, 'canEditAttendance') ||
           hasOrgPerm(orgId, 'canViewReports') ||
+          hasOrgPerm(orgId, 'canExportData') ||
+          hasOrgPerm(orgId, 'canApproveCorrections') ||
           resource.data.memberUid == request.auth.uid
         );
 
@@ -314,6 +338,8 @@ service cloud.firestore {
             isOrgOwner(orgId) ||
             hasOrgPerm(orgId, 'canTakeAttendance') ||
             hasOrgPerm(orgId, 'canEditAttendance') ||
+            (hasOrgPerm(orgId, 'canApproveLeaves') && incoming().status == 'on_leave') ||
+            hasOrgPerm(orgId, 'canApproveCorrections') ||
             (incoming().memberUid == request.auth.uid
               && get(/databases/$(database)/documents/organizations/$(orgId)).data.policies.allowSelfCheckIn == true)
           );
@@ -375,6 +401,7 @@ service cloud.firestore {
         allow create: if isVerifiedMemberOfOrg(orgId) && incoming().orgId == orgId && (
           isOrgOwner(orgId) ||
           hasOrgPerm(orgId, 'canTakeAttendance') ||
+          hasOrgPerm(orgId, 'canEditAttendance') ||
           hasOrgPerm(orgId, 'canManageMembers') ||
           hasOrgPerm(orgId, 'canApproveLeaves') ||
           hasOrgPerm(orgId, 'canApproveCorrections') ||

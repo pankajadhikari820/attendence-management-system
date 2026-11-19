@@ -1,5 +1,5 @@
 import { Chart, registerables } from 'chart.js';
-import { fetchOrgCollection } from '../services/firestoreService.js';
+import { fetchOrgCollection, where } from '../services/firestoreService.js';
 import { filterMembersByManagerScope } from '../services/hierarchyService.js';
 import {
   reviewOrgLeaveRequest,
@@ -103,13 +103,26 @@ async function renderManagerOverview(container) {
     window.dispatchEvent(new CustomEvent('smartattend:navigate', { detail: 'my-qr' }));
   });
 
+  const { firebaseUser } = getState();
+  const canReadAttendance = Boolean(
+    resolvedPermissions?.canTakeAttendance ||
+    resolvedPermissions?.canEditAttendance ||
+    resolvedPermissions?.canViewReports ||
+    resolvedPermissions?.canExportData ||
+    resolvedPermissions?.canApproveCorrections
+  );
+  const canReadLeaves = Boolean(resolvedPermissions?.canApproveLeaves || resolvedPermissions?.canViewReports);
+  const canReadCorrs = Boolean(resolvedPermissions?.canApproveCorrections);
+
   const body = container.querySelector('#mgr-overview-body');
   try {
     const [allMembers, records, leaves, corrections] = await Promise.all([
       fetchOrgCollection(activeOrgId, 'members'),
-      fetchOrgCollection(activeOrgId, 'attendanceRecords'),
-      fetchOrgCollection(activeOrgId, 'leaveRequests'),
-      fetchOrgCollection(activeOrgId, 'correctionRequests'),
+      canReadAttendance
+        ? fetchOrgCollection(activeOrgId, 'attendanceRecords')
+        : fetchOrgCollection(activeOrgId, 'attendanceRecords', [where('memberUid', '==', firebaseUser.uid)]),
+      canReadLeaves ? fetchOrgCollection(activeOrgId, 'leaveRequests') : Promise.resolve([]),
+      canReadCorrs ? fetchOrgCollection(activeOrgId, 'correctionRequests') : Promise.resolve([]),
     ]);
 
     const scopedMembers = filterMembersByManagerScope(allMembers, activeMember, resolvedPermissions).filter(
@@ -190,10 +203,19 @@ async function renderManagerOverview(container) {
 }
 
 async function renderManagerScopedMembers(container) {
-  const { activeOrgId, activeMember, resolvedPermissions, settings } = getState();
+  const { activeOrgId, activeMember, resolvedPermissions, settings, firebaseUser } = getState();
+  const canReadAttendance = Boolean(
+    resolvedPermissions?.canTakeAttendance ||
+    resolvedPermissions?.canEditAttendance ||
+    resolvedPermissions?.canViewReports ||
+    resolvedPermissions?.canExportData ||
+    resolvedPermissions?.canApproveCorrections
+  );
   const [allMembers, records, depts] = await Promise.all([
     fetchOrgCollection(activeOrgId, 'members'),
-    fetchOrgCollection(activeOrgId, 'attendanceRecords'),
+    canReadAttendance
+      ? fetchOrgCollection(activeOrgId, 'attendanceRecords')
+      : fetchOrgCollection(activeOrgId, 'attendanceRecords', [where('memberUid', '==', firebaseUser.uid)]),
     fetchOrgCollection(activeOrgId, 'departments'),
   ]);
   const scoped = filterMembersByManagerScope(allMembers, activeMember, resolvedPermissions);
@@ -254,8 +276,8 @@ async function renderManagerScopedRequests(container) {
   async function load() {
     const [allMembers, leaves, corrs] = await Promise.all([
       fetchOrgCollection(activeOrgId, 'members'),
-      fetchOrgCollection(activeOrgId, 'leaveRequests'),
-      fetchOrgCollection(activeOrgId, 'correctionRequests'),
+      resolvedPermissions?.canApproveLeaves ? fetchOrgCollection(activeOrgId, 'leaveRequests') : Promise.resolve([]),
+      resolvedPermissions?.canApproveCorrections ? fetchOrgCollection(activeOrgId, 'correctionRequests') : Promise.resolve([]),
     ]);
     const scopedUids = new Set(filterMembersByManagerScope(allMembers, activeMember, resolvedPermissions).map((m) => m.uid));
     const scopedLeaves = leaves.filter((l) => scopedUids.has(l.memberUid));

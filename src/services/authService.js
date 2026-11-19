@@ -16,6 +16,7 @@ import {
   fetchUserProfileAndMemberships,
   loadOrganizationContext,
   joinOrganizationWithCodeOrId,
+  ensureGlobalUserProfile,
 } from './orgService.js';
 import { validateUserProfile } from '../utils/authRouting.js';
 
@@ -26,26 +27,52 @@ export function isAuthFlowInProgress() {
   return authFlowInProgress;
 }
 
+async function syncFreshAuthToken(user) {
+  if (!user) return;
+  await reload(user).catch(() => {});
+  await user.getIdToken(true).catch(() => {});
+}
+
 export async function resolvePostLoginSession(firebaseUser, preferredOrgId = '') {
   const { userProfile, memberships } = await fetchUserProfileAndMemberships(firebaseUser.uid);
 
-  if (!userProfile && memberships.length === 0) {
-    return {
-      user: firebaseUser,
-      userProfile: null,
-      memberships: [],
-      needsOrgOnboarding: true,
+  let resolvedProfile = userProfile;
+  if (!resolvedProfile) {
+    await ensureGlobalUserProfile({
+      uid: firebaseUser.uid,
+      name: firebaseUser.displayName || 'SmartAttend User',
+      email: firebaseUser.email || '',
+      emailVerified: firebaseUser.emailVerified,
+      activeOrgId: memberships[0]?.orgId || '',
+    });
+    resolvedProfile = {
+      id: firebaseUser.uid,
+      uid: firebaseUser.uid,
+      name: firebaseUser.displayName || 'SmartAttend User',
+      email: String(firebaseUser.email || '').trim().toLowerCase(),
+      avatarUrl: firebaseUser.photoURL || '',
+      emailVerified: Boolean(firebaseUser.emailVerified),
+      lastActiveOrgId: memberships[0]?.orgId || '',
+      status: 'active',
     };
   }
 
-  if (userProfile) {
-    validateUserProfile(userProfile, firebaseUser.uid);
-    if (userProfile.emailVerified !== firebaseUser.emailVerified) {
-      await updateDoc(doc(db, 'users', firebaseUser.uid), {
-        emailVerified: firebaseUser.emailVerified,
-        updatedAt: serverTimestamp(),
-      }).catch(() => {});
-    }
+  validateUserProfile(resolvedProfile, firebaseUser.uid);
+  if (resolvedProfile.emailVerified !== firebaseUser.emailVerified) {
+    await updateDoc(doc(db, 'users', firebaseUser.uid), {
+      emailVerified: firebaseUser.emailVerified,
+      updatedAt: serverTimestamp(),
+    }).catch(() => {});
+    resolvedProfile = { ...resolvedProfile, emailVerified: firebaseUser.emailVerified };
+  }
+
+  if (memberships.length === 0) {
+    return {
+      user: firebaseUser,
+      userProfile: resolvedProfile,
+      memberships: [],
+      needsOrgOnboarding: true,
+    };
   }
 
   const activeMemberships = memberships.filter((m) => m.status === 'active');
@@ -59,7 +86,7 @@ export async function resolvePostLoginSession(firebaseUser, preferredOrgId = '')
     }
     return {
       user: firebaseUser,
-      userProfile,
+      userProfile: resolvedProfile,
       memberships,
       needsOrgOnboarding: true,
     };
@@ -67,14 +94,14 @@ export async function resolvePostLoginSession(firebaseUser, preferredOrgId = '')
 
   const targetOrgId =
     (preferredOrgId && activeMemberships.some((m) => m.orgId === preferredOrgId) && preferredOrgId) ||
-    (userProfile?.lastActiveOrgId && activeMemberships.some((m) => m.orgId === userProfile.lastActiveOrgId)
-      ? userProfile.lastActiveOrgId
+    (resolvedProfile?.lastActiveOrgId && activeMemberships.some((m) => m.orgId === resolvedProfile.lastActiveOrgId)
+      ? resolvedProfile.lastActiveOrgId
       : '');
 
   if (activeMemberships.length > 1 && !targetOrgId) {
     return {
       user: firebaseUser,
-      userProfile,
+      userProfile: resolvedProfile,
       memberships: activeMemberships,
       needsOrgSelection: true,
     };
@@ -85,7 +112,7 @@ export async function resolvePostLoginSession(firebaseUser, preferredOrgId = '')
 
   return {
     user: firebaseUser,
-    userProfile: userProfile || { uid: firebaseUser.uid, name: firebaseUser.displayName, email: firebaseUser.email },
+    userProfile: resolvedProfile,
     memberships: activeMemberships,
     activeOrgId: chosenOrgId,
     ...orgContext,
@@ -96,7 +123,7 @@ export async function loginWithEmail(email, password) {
   authFlowInProgress = true;
   try {
     const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
-    await reload(cred.user).catch(() => {});
+    await syncFreshAuthToken(cred.user);
     if (!cred.user.emailVerified) {
       return { user: cred.user, requiresVerification: true };
     }
@@ -112,6 +139,7 @@ export async function loginWithGoogle() {
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
     const cred = await signInWithPopup(auth, provider);
+    await cred.user.getIdToken(true).catch(() => {});
     return await resolvePostLoginSession(cred.user);
   } finally {
     authFlowInProgress = false;
@@ -138,6 +166,9 @@ export async function registerOrganizationOwner({
       firebaseUser = cred.user;
       await updateProfile(firebaseUser, { displayName: ownerName.trim() });
       await sendEmailVerification(firebaseUser).catch(() => {});
+      await firebaseUser.getIdToken(true).catch(() => {});
+    } else {
+      await syncFreshAuthToken(firebaseUser);
     }
 
     const created = await provisionOrganizationDocuments({
@@ -181,6 +212,9 @@ export async function registerAndJoinOrganization({
       firebaseUser = cred.user;
       await updateProfile(firebaseUser, { displayName: name.trim() });
       await sendEmailVerification(firebaseUser).catch(() => {});
+      await firebaseUser.getIdToken(true).catch(() => {});
+    } else {
+      await syncFreshAuthToken(firebaseUser);
     }
 
     const joined = await joinOrganizationWithCodeOrId({
@@ -221,9 +255,13 @@ export async function refreshVerificationStatus() {
   if (!auth.currentUser) return false;
   await reload(auth.currentUser);
   if (auth.currentUser.emailVerified) {
-    await updateDoc(doc(db, 'users', auth.currentUser.uid), {
+    await auth.currentUser.getIdToken(true).catch(() => {});
+    await ensureGlobalUserProfile({
+      uid: auth.currentUser.uid,
+      name: auth.currentUser.displayName || 'SmartAttend User',
+      email: auth.currentUser.email || '',
       emailVerified: true,
-      updatedAt: serverTimestamp(),
+      activeOrgId: '',
     }).catch(() => {});
   }
   return auth.currentUser.emailVerified;

@@ -71,28 +71,33 @@ export function getOrgTypeMeta(typeId) {
   return ORG_TYPES.find((t) => t.id === typeId) || ORG_TYPES[ORG_TYPES.length - 1];
 }
 
-async function ensureGlobalUserProfile({ uid, name, email, emailVerified, activeOrgId }) {
+export async function ensureGlobalUserProfile({ uid, name, email, emailVerified, activeOrgId = '' }) {
+  const cleanName = String(name || '').trim() || 'SmartAttend User';
+  const cleanEmail = String(email || '').trim().toLowerCase();
   const userRef = doc(db, 'users', uid);
   const existingSnap = await getDoc(userRef);
   if (!existingSnap.exists()) {
     await setDoc(userRef, {
       uid,
-      name: name.trim(),
-      email: email.trim().toLowerCase(),
+      name: cleanName,
+      email: cleanEmail,
       avatarUrl: '',
       emailVerified: Boolean(emailVerified),
-      lastActiveOrgId: activeOrgId,
+      lastActiveOrgId: activeOrgId || '',
       status: 'active',
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
   } else {
-    await updateDoc(userRef, {
-      name: name.trim(),
+    const patch = {
+      name: cleanName,
       emailVerified: Boolean(emailVerified),
-      lastActiveOrgId: activeOrgId,
       updatedAt: serverTimestamp(),
-    });
+    };
+    if (activeOrgId) {
+      patch.lastActiveOrgId = activeOrgId;
+    }
+    await updateDoc(userRef, patch);
   }
 }
 
@@ -109,6 +114,9 @@ export async function provisionOrganizationDocuments({
   description = '',
   emailVerified = false,
 }) {
+  if (String(orgName || '').trim().length < 2) {
+    throw new Error('Organization name must be at least 2 characters.');
+  }
   const orgId = generateOrgId();
   const memberPublicId = generateMemberPublicId(orgId);
   const qrTokenId = generateOpaqueQrToken();
@@ -522,6 +530,21 @@ export async function joinOrganizationWithCodeOrId({
   }
 
   const orgSnap = await getDoc(doc(db, 'organizations', targetOrgId));
+  if (!orgSnap.exists()) {
+    throw new Error(`Organization "${targetOrgId}" was not found.`);
+  }
+  const existingMembershipSnap = await getDoc(doc(db, 'users', uid, 'memberships', targetOrgId));
+  if (existingMembershipSnap.exists()) {
+    const curStatus = existingMembershipSnap.data()?.status;
+    if (curStatus === 'pending') {
+      throw new Error(`Your join request for "${orgSnap.data().name}" is already pending admin approval.`);
+    }
+    if (curStatus === 'active') {
+      throw new Error(`You are already an active member of "${orgSnap.data().name}".`);
+    }
+    throw new Error(`A membership record already exists for "${orgSnap.data().name}" (status: ${curStatus}).`);
+  }
+
   const orgData = orgSnap.data();
   const memberPublicId = generateMemberPublicId(targetOrgId);
   const qrTokenId = generateOpaqueQrToken();

@@ -1,6 +1,6 @@
 import { onAuthStateChanged } from 'firebase/auth';
 import { query, where, onSnapshot } from 'firebase/firestore';
-import { auth, testFirestoreConnection } from './firebase/config.js';
+import { auth } from './firebase/config.js';
 import {
   isAuthFlowInProgress,
   resolvePostLoginSession,
@@ -471,13 +471,19 @@ async function activateSessionPayload(sessionPayload, announce = false) {
   }
 }
 
+let authSyncSeq = 0;
 async function handleAuthSync(firebaseUser) {
+  const seq = ++authSyncSeq;
   if (!firebaseUser) {
     resetWorkspaceState();
     setState({ authReady: true, firebaseUser: null });
     renderWorkspaceShell();
     return;
   }
+
+  await firebaseUser.reload().catch(() => {});
+  await firebaseUser.getIdToken(true).catch(() => {});
+  if (seq !== authSyncSeq) return;
 
   if (!firebaseUser.emailVerified) {
     setState({ authReady: true, firebaseUser });
@@ -487,8 +493,10 @@ async function handleAuthSync(firebaseUser) {
 
   try {
     const session = await resolvePostLoginSession(firebaseUser);
+    if (seq !== authSyncSeq) return;
     await activateSessionPayload(session, false);
   } catch (err) {
+    if (seq !== authSyncSeq) return;
     console.error('Session initialization error:', err);
     const msg = err?.message || 'Unable to verify organization membership.';
     await logoutUser().catch(() => {});
@@ -534,7 +542,7 @@ window.addEventListener('smartattend:switch-org', async (e) => {
 
 async function boot() {
   initPwaAndNetwork((online) => setState({ isOnline: online }));
-  testFirestoreConnection();
+  await auth.authStateReady();
   onAuthStateChanged(auth, (user) => {
     if (isAuthFlowInProgress()) return;
     handleAuthSync(user);

@@ -4,7 +4,7 @@ import {
   sendEmailVerification,
   signOut,
 } from 'firebase/auth';
-import { doc, writeBatch, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, writeBatch, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions, getSecondaryAuth } from '../firebase/config.js';
 import {
@@ -195,19 +195,17 @@ export async function provisionOrgMember({
   const qrTokenId = generateOpaqueQrToken();
 
   const batch = writeBatch(db);
-  batch.set(
-    doc(db, 'users', uid),
-    {
-      uid,
-      name: cleanName,
-      email: cleanEmail,
-      emailVerified: false,
-      lastActiveOrgId: orgId,
-      status: 'active',
-      updatedAt: serverTimestamp(),
-    },
-    { merge: true }
-  );
+  batch.set(doc(db, 'users', uid), {
+    uid,
+    name: cleanName,
+    email: cleanEmail,
+    avatarUrl: '',
+    emailVerified: false,
+    lastActiveOrgId: orgId,
+    status: 'active',
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
 
   batch.set(doc(db, 'users', uid, 'memberships', orgId), {
     orgId,
@@ -305,7 +303,7 @@ export async function updateOrgMemberHierarchy(orgId, memberUid, patch, before =
     await updateDoc(doc(db, 'users', memberUid, 'memberships', orgId), {
       ...membershipPatch,
       updatedAt: serverTimestamp(),
-    }).catch(() => {});
+    });
   }
 
   await logOrgAudit({
@@ -325,11 +323,15 @@ export async function revokeAndRegenerateMemberQr(orgId, member) {
   const batch = writeBatch(db);
 
   if (oldTokenId) {
-    batch.set(
-      doc(db, 'organizations', orgId, 'qrTokens', oldTokenId),
-      { active: false, revokedAt: serverTimestamp(), updatedAt: serverTimestamp() },
-      { merge: true }
-    );
+    const oldTokenRef = doc(db, 'organizations', orgId, 'qrTokens', oldTokenId);
+    const oldTokenSnap = await getDoc(oldTokenRef).catch(() => null);
+    if (oldTokenSnap?.exists()) {
+      batch.update(oldTokenRef, {
+        active: false,
+        revokedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
   }
 
   batch.set(doc(db, 'organizations', orgId, 'qrTokens', newTokenId), {

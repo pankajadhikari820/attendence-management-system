@@ -310,11 +310,57 @@ function testRoutesRecordsAndSecurityArtifacts() {
   assert.ok(step1Idx > 0 && step2Idx > step1Idx && step3Idx > step2Idx, 'Org creation must order user profile -> org root -> subcollections batch');
 }
 
+function testSecurityAuditAndPermissionFixes() {
+  const rules = fs.readFileSync('firestore.rules', 'utf8');
+  const mainSrc = fs.readFileSync('src/main.js', 'utf8');
+  const authSrc = fs.readFileSync('src/services/authService.js', 'utf8');
+  const orgSrc = fs.readFileSync('src/services/orgService.js', 'utf8');
+  const hierSrc = fs.readFileSync('src/services/hierarchyService.js', 'utf8');
+  const attSrc = fs.readFileSync('src/services/attendanceService.js', 'utf8');
+  const mgrSrc = fs.readFileSync('src/views/managerView.js', 'utf8');
+  const memSrc = fs.readFileSync('src/views/memberView.js', 'utf8');
+
+  // 1 & 2. Auth timing, ID token refresh, and missing profile healing
+  assert.doesNotMatch(mainSrc, /testFirestoreConnection/, 'Must not probe /test/connection before auth');
+  assert.match(mainSrc, /await auth\.authStateReady\(\)/, 'Boot must await auth.authStateReady()');
+  assert.match(mainSrc, /getIdToken\(true\)/, 'Auth sync must force-refresh ID token');
+  assert.match(authSrc, /getIdToken\(true\)/, 'Auth service must force-refresh ID token after login/verification');
+  assert.match(authSrc, /if \(!resolvedProfile\)[\s\S]*ensureGlobalUserProfile/, 'Must auto-heal missing users/{uid} doc');
+
+  // 3. Organization creation guard & rule safety
+  assert.match(orgSrc, /orgName \|\| ''\)\.trim\(\)\.length < 2/, 'Org creation must enforce min length >= 2');
+  assert.match(orgSrc, /existingMembershipSnap\.exists\(\)/, 'Join org must check existing membership before batch.set');
+
+  // 4. Owner provisioning & hierarchy sync
+  assert.match(rules, /isOrgOwner\(incoming\(\)\.lastActiveOrgId\) \|\|[\s\S]*hasOrgPerm\(incoming\(\)\.lastActiveOrgId, 'canManageMembers'\)/);
+  assert.match(hierSrc, /createdAt:\s*serverTimestamp\(\)[\s\S]*updatedAt:\s*serverTimestamp\(\)/, 'provisionOrgMember must write full users/{uid} doc without merge');
+  assert.doesNotMatch(hierSrc, /memberships', orgId\)[\s\S]*?\.catch\(\(\) => \{\}\)/, 'Membership sync errors must not be silently swallowed');
+  assert.match(hierSrc, /batch\.update\(oldTokenRef/, 'QR rotation must update existing token doc safely');
+
+  // 5 & 6. Manager scoped queries & Member self-check-in
+  assert.match(mgrSrc, /canReadAttendance\s*\?\s*fetchOrgCollection\(activeOrgId, 'attendanceRecords'\)/);
+  assert.match(mgrSrc, /canReadLeaves\s*\?\s*fetchOrgCollection\(activeOrgId, 'leaveRequests'\)/);
+  assert.match(mgrSrc, /canReadCorrs\s*\?\s*fetchOrgCollection\(activeOrgId, 'correctionRequests'\)/);
+  assert.match(attSrc, /orgDoc\(orgId, 'members', scannerUid\)/, 'Self check-in must resolve own member doc via getDoc');
+  assert.match(memSrc, /fetchOrgDoc\(activeOrgId, 'members', activeMember\.parentMemberId\)\.catch/, 'Member overview must guard parentMemberId lookup');
+
+  // 7, 8 & 9. Firestore rules strictness (no allow all, strict tenant & self-escalation guards)
+  assert.doesNotMatch(rules, /allow\s+read,\s*write:\s*if\s+true/i, 'Rules must never allow unrestricted public read/write');
+  assert.match(rules, /match \/\s*\{document=\*\*\}\s*\{\s*allow read, write: if false;/);
+  assert.match(rules, /allow list: if isSignedIn\(\) && request\.auth\.uid == userId;/);
+  assert.match(rules, /match \/invitations\/\{inviteCode\}[\s\S]*allow get: if isSignedIn\(\) && isValidId\(inviteCode\)/);
+  assert.match(rules, /existing\(\)\.status == 'pending'/);
+  assert.match(rules, /hasOrgPerm\(orgId, 'canApproveLeaves'\) && incoming\(\)\.status == 'on_leave'/);
+  assert.match(rules, /hasOrgPerm\(orgId, 'canApproveCorrections'\)/);
+  assert.match(rules, /incoming\(\)\.portalTier == 'member'/);
+}
+
 testOrgIdsAndZeroPiiQr();
 testCapabilityBasedHierarchyAndRouting();
 testHierarchyTreeAndManagerScope();
 testShiftTimingHolidayAndAttendanceMath();
 testBulkCsvImportAndGeofence();
 testRoutesRecordsAndSecurityArtifacts();
+testSecurityAuditAndPermissionFixes();
 
 console.log('All SmartAttend multi-tenant SaaS workflow, hierarchy, QR security, policy, and PWA checks passed.');

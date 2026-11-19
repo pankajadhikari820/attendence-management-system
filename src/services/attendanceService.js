@@ -182,13 +182,31 @@ export async function scanMemberQrForAttendance({
     if (!memberSnap.exists()) throw new Error('Member profile not found in this organization.');
     targetMember = { id: memberSnap.id, ...memberSnap.data() };
   } else if (parsed.kind === 'member_public_id') {
-    const mSnap = await getDocs(
-      query(orgCol(orgId, 'members'), where('memberPublicId', '==', parsed.memberPublicId))
+    const { activeMember, resolvedPermissions } = getState();
+    const canListMembers = Boolean(
+      activeMember?.isOwner ||
+      resolvedPermissions?.canTakeAttendance ||
+      resolvedPermissions?.canManageMembers
     );
-    if (mSnap.empty) {
-      throw new Error(`Member ID "${parsed.memberPublicId}" not found in ${orgId}.`);
+    if (!canListMembers || (activeMember?.uid === scannerUid && activeMember?.memberPublicId === parsed.memberPublicId)) {
+      const selfSnap = await getDoc(orgDoc(orgId, 'members', scannerUid));
+      if (!selfSnap.exists()) {
+        throw new Error(`Member profile not found in ${orgId}.`);
+      }
+      const selfData = selfSnap.data();
+      if (selfData.memberPublicId !== parsed.memberPublicId) {
+        throw new Error('Unauthorized: members can only check in using their own Member ID.');
+      }
+      targetMember = { id: selfSnap.id, ...selfData };
+    } else {
+      const mSnap = await getDocs(
+        query(orgCol(orgId, 'members'), where('memberPublicId', '==', parsed.memberPublicId))
+      );
+      if (mSnap.empty) {
+        throw new Error(`Member ID "${parsed.memberPublicId}" not found in ${orgId}.`);
+      }
+      targetMember = { id: mSnap.docs[0].id, ...mSnap.docs[0].data() };
     }
-    targetMember = { id: mSnap.docs[0].id, ...mSnap.docs[0].data() };
   } else {
     throw new Error('Expected a Member Personal QR ID or Member ID code.');
   }
